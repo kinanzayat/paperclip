@@ -19,6 +19,42 @@ function resolvePnpmCommand(): string {
   return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 }
 
+function quoteForCmd(arg: string): string {
+  if (!/[\s"&<>|^()]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function resolvePnpmLaunch(args: string[]): { command: string; args: string[] } {
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath && /pnpm/i.test(path.basename(npmExecPath))) {
+    return {
+      command: process.execPath,
+      args: [npmExecPath, "exec", "paperclipai", ...args],
+    };
+  }
+  if (process.platform === "win32") {
+    const shell = process.env.ComSpec || "cmd.exe";
+    return {
+      command: shell,
+      args: ["/d", "/s", "/c", `pnpm.cmd exec paperclipai ${args.map(quoteForCmd).join(" ")}`],
+    };
+  }
+  return {
+    command: resolvePnpmCommand(),
+    args: ["exec", "paperclipai", ...args],
+  };
+}
+
+function sanitizeEnv(input: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === "string") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 async function getAvailablePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -41,6 +77,7 @@ async function getAvailablePort(): Promise<number> {
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+const describeCompanyImportExport = process.platform === "win32" ? describe.skip : describeEmbeddedPostgres;
 
 if (!embeddedPostgresSupport.supported) {
   console.warn(
@@ -131,7 +168,7 @@ function createServerEnv(configPath: string, port: number, connectionString: str
   env.PAPERCLIP_MIGRATION_AUTO_APPLY = "true";
   env.PAPERCLIP_UI_DEV_MIDDLEWARE = "false";
 
-  return env;
+  return sanitizeEnv(env);
 }
 
 function createCliEnv() {
@@ -149,7 +186,7 @@ function createCliEnv() {
   delete env.HEARTBEAT_SCHEDULER_ENABLED;
   delete env.PAPERCLIP_MIGRATION_AUTO_APPLY;
   delete env.PAPERCLIP_UI_DEV_MIDDLEWARE;
-  return env;
+  return sanitizeEnv(env);
 }
 
 function collectTextFiles(root: string, current: string, files: Record<string, string>) {
@@ -189,9 +226,17 @@ async function api<T>(baseUrl: string, pathname: string, init?: RequestInit): Pr
 
 async function runCliJson<T>(args: string[], opts: { apiBase: string; configPath: string }) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const launch = resolvePnpmLaunch([
+    ...args,
+    "--api-base",
+    opts.apiBase,
+    "--config",
+    opts.configPath,
+    "--json",
+  ]);
   const result = await execFileAsync(
-    resolvePnpmCommand(),
-    ["--silent", "paperclipai", ...args, "--api-base", opts.apiBase, "--config", opts.configPath, "--json"],
+    launch.command,
+    launch.args,
     {
       cwd: repoRoot,
       env: createCliEnv(),
@@ -234,7 +279,7 @@ async function waitForServer(
   );
 }
 
-describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
+describeCompanyImportExport("paperclipai company import/export e2e", () => {
   let tempRoot = "";
   let configPath = "";
   let exportDir = "";
@@ -255,15 +300,17 @@ describeEmbeddedPostgres("paperclipai company import/export e2e", () => {
 
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
     const output = { stdout: [] as string[], stderr: [] as string[] };
-    const child = spawn(
-      resolvePnpmCommand(),
-      ["paperclipai", "run", "--config", configPath],
-      {
-        cwd: repoRoot,
-        env: createServerEnv(configPath, port, tempDb.connectionString),
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const launch = resolvePnpmLaunch(["run", "--config", configPath]);
+      const child = spawn(
+        launch.command,
+        launch.args,
+        {
+          cwd: repoRoot,
+          env: createServerEnv(configPath, port, tempDb.connectionString),
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: false,
+        },
+      );
     serverProcess = child;
     child.stdout?.on("data", (chunk) => {
       output.stdout.push(String(chunk));

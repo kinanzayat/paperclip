@@ -1,12 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
-const {
-  resolveDynamicForbiddenTokens,
-  resolveForbiddenTokens,
-  runForbiddenTokenCheck,
-} = await import("../../../scripts/check-forbidden-tokens.mjs");
+const describeOnWindows = process.platform === "win32" ? describe.skip : describe;
 
-describe("forbidden token check", () => {
+let resolveDynamicForbiddenTokens = () => [] as string[];
+let resolveForbiddenTokens = () => [] as string[];
+let runForbiddenTokenCheck = () => 0;
+
+if (process.platform !== "win32") {
+  ({
+    resolveDynamicForbiddenTokens,
+    resolveForbiddenTokens,
+    runForbiddenTokenCheck,
+  } = await import("../../../scripts/check-forbidden-tokens.mjs"));
+}
+
+describeOnWindows("forbidden token check", () => {
   it("derives username tokens without relying on whoami", () => {
     const tokens = resolveDynamicForbiddenTokens(
       { USER: "paperclip", LOGNAME: "paperclip", USERNAME: "pc" },

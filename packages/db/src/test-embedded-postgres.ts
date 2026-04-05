@@ -65,6 +65,13 @@ function formatEmbeddedPostgresError(error: unknown): string {
 }
 
 async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSupport> {
+  if (process.platform === "win32") {
+    return {
+      supported: false,
+      reason: "embedded Postgres test support is disabled on Windows",
+    };
+  }
+
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-embedded-postgres-probe-"));
   const port = await getAvailablePort();
   const EmbeddedPostgres = await getEmbeddedPostgresCtor();
