@@ -436,11 +436,40 @@ async function pathExists(candidate: string) {
   }
 }
 
+async function readShebangInterpreter(filePath: string): Promise<string | null> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
+    if (!firstLine.startsWith("#!")) return null;
+    const raw = firstLine.slice(2).trim();
+    if (!raw) return null;
+    const parts = raw.split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return null;
+
+    // Handle common env-style shebangs such as "#!/usr/bin/env node".
+    if (parts[0]?.toLowerCase().endsWith("/env")) {
+      return parts[1] ?? null;
+    }
+
+    return path.basename(parts[0] ?? "") || null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveCommandPath(command: string, cwd: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   const hasPathSeparator = command.includes("/") || command.includes("\\");
   if (hasPathSeparator) {
     const absolute = path.isAbsolute(command) ? command : path.resolve(cwd, command);
-    return (await pathExists(absolute)) ? absolute : null;
+    if (await pathExists(absolute)) return absolute;
+    if (process.platform === "win32" && path.extname(absolute).length === 0) {
+      const exts = windowsPathExts(env);
+      for (const ext of exts) {
+        const candidate = `${absolute}${ext}`;
+        if (await pathExists(candidate)) return candidate;
+      }
+    }
+    return null;
   }
 
   const pathValue = env.PATH ?? env.Path ?? "";
@@ -454,7 +483,7 @@ async function resolveCommandPath(command: string, cwd: string, env: NodeJS.Proc
       process.platform === "win32"
         ? hasExtension
           ? [path.join(dir, command)]
-          : exts.map((ext) => path.join(dir, `${command}${ext}`))
+          : [path.join(dir, command), ...exts.map((ext) => path.join(dir, `${command}${ext}`))]
         : [path.join(dir, command)];
     for (const candidate of candidates) {
       if (await pathExists(candidate)) return candidate;
@@ -494,6 +523,25 @@ async function resolveSpawnTarget(
       command: shell,
       args: ["/d", "/s", "/c", commandLine],
     };
+  }
+
+  if (path.extname(executable).length === 0) {
+    const interpreter = await readShebangInterpreter(executable);
+    if (interpreter) {
+      if (interpreter === "node") {
+        return {
+          command: process.execPath,
+          args: [executable, ...args],
+        };
+      }
+      const resolvedInterpreter = await resolveCommandPath(interpreter, cwd, env);
+      if (resolvedInterpreter) {
+        return {
+          command: resolvedInterpreter,
+          args: [executable, ...args],
+        };
+      }
+    }
   }
 
   return { command: executable, args };
@@ -836,7 +884,14 @@ export async function ensurePaperclipSkillSymlink(
   source: string,
   target: string,
   linkSkill: (source: string, target: string) => Promise<void> = (linkSource, linkTarget) =>
-    fs.symlink(linkSource, linkTarget),
+    fs
+      .stat(linkSource)
+      .then((stats) => {
+        if (process.platform === "win32" && stats.isDirectory()) {
+          return fs.symlink(linkSource, linkTarget, "junction");
+        }
+        return fs.symlink(linkSource, linkTarget);
+      }),
 ): Promise<"created" | "repaired" | "skipped"> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {

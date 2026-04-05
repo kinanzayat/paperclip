@@ -36,6 +36,13 @@ const baseAgent = {
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
   create: vi.fn(),
+  pause: vi.fn(),
+  resume: vi.fn(),
+  terminate: vi.fn(),
+  remove: vi.fn(),
+  listKeys: vi.fn(),
+  createApiKey: vi.fn(),
+  revokeKey: vi.fn(),
   updatePermissions: vi.fn(),
   getChainOfCommand: vi.fn(),
   resolveByReference: vi.fn(),
@@ -43,6 +50,7 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
+  isCompanyAdmin: vi.fn(),
   hasPermission: vi.fn(),
   getMembership: vi.fn(),
   ensureMembership: vi.fn(),
@@ -62,6 +70,7 @@ const mockBudgetService = vi.hoisted(() => ({
 const mockHeartbeatService = vi.hoisted(() => ({
   listTaskSessions: vi.fn(),
   resetRuntimeSession: vi.fn(),
+  cancelActiveForAgent: vi.fn(),
 }));
 
 const mockIssueApprovalService = vi.hoisted(() => ({
@@ -189,6 +198,13 @@ describe("agent permission routes", () => {
     mockAgentService.getChainOfCommand.mockResolvedValue([]);
     mockAgentService.resolveByReference.mockResolvedValue({ ambiguous: false, agent: baseAgent });
     mockAgentService.create.mockResolvedValue(baseAgent);
+    mockAgentService.pause.mockResolvedValue(baseAgent);
+    mockAgentService.resume.mockResolvedValue(baseAgent);
+    mockAgentService.terminate.mockResolvedValue(baseAgent);
+    mockAgentService.remove.mockResolvedValue(baseAgent);
+    mockAgentService.listKeys.mockResolvedValue([]);
+    mockAgentService.createApiKey.mockResolvedValue({ id: "key-1", token: "secret-token" });
+    mockAgentService.revokeKey.mockResolvedValue({ id: "key-1" });
     mockAgentService.updatePermissions.mockResolvedValue(baseAgent);
     mockAccessService.getMembership.mockResolvedValue({
       id: "membership-1",
@@ -201,6 +217,7 @@ describe("agent permission routes", () => {
       updatedAt: new Date("2026-03-19T00:00:00.000Z"),
     });
     mockAccessService.listPrincipalGrants.mockResolvedValue([]);
+    mockAccessService.isCompanyAdmin.mockResolvedValue(true);
     mockAccessService.ensureMembership.mockResolvedValue(undefined);
     mockAccessService.setPrincipalPermission.mockResolvedValue(undefined);
     mockCompanySkillService.listRuntimeSkillEntries.mockResolvedValue([]);
@@ -361,5 +378,38 @@ describe("agent permission routes", () => {
         status: "todo",
       },
     ]);
+  });
+
+  it("rejects pause for board members without admin role", async () => {
+    mockAccessService.isCompanyAdmin.mockResolvedValue(false);
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app).post(`/api/agents/${agentId}/pause`).send({});
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/company admin required/i);
+    expect(mockAgentService.pause).not.toHaveBeenCalled();
+  });
+
+  it("allows pause for company admins", async () => {
+    mockAccessService.isCompanyAdmin.mockResolvedValue(true);
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app).post(`/api/agents/${agentId}/pause`).send({});
+
+    expect(res.status).toBe(200);
+    expect(mockAgentService.pause).toHaveBeenCalledWith(agentId);
   });
 });

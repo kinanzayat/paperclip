@@ -12,6 +12,10 @@ function nonEmpty(value: string | undefined): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function resolveUserHome(env: NodeJS.ProcessEnv = process.env): string {
+  return nonEmpty(env.HOME) ?? nonEmpty(env.USERPROFILE) ?? os.homedir();
+}
+
 export async function pathExists(candidate: string): Promise<boolean> {
   return fs.access(candidate).then(() => true).catch(() => false);
 }
@@ -20,7 +24,7 @@ export function resolveSharedCodexHomeDir(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const fromEnv = nonEmpty(env.CODEX_HOME);
-  return fromEnv ? path.resolve(fromEnv) : path.join(os.homedir(), ".codex");
+  return fromEnv ? path.resolve(fromEnv) : path.join(resolveUserHome(env), ".codex");
 }
 
 function isWorktreeMode(env: NodeJS.ProcessEnv): boolean {
@@ -42,11 +46,36 @@ async function ensureParentDir(target: string): Promise<void> {
   await fs.mkdir(path.dirname(target), { recursive: true });
 }
 
+async function createLinkCrossPlatform(source: string, target: string): Promise<void> {
+  const sourceStats = await fs.stat(source);
+  const isDirectory = sourceStats.isDirectory();
+
+  try {
+    await fs.symlink(source, target, isDirectory && process.platform === "win32" ? "junction" : undefined);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EACCES")) {
+      throw err;
+    }
+  }
+
+  if (isDirectory) {
+    throw new Error(`Could not link directory "${source}" to "${target}" on Windows.`);
+  }
+
+  try {
+    await fs.link(source, target);
+  } catch {
+    await fs.copyFile(source, target);
+  }
+}
+
 async function ensureSymlink(target: string, source: string): Promise<void> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
     await ensureParentDir(target);
-    await fs.symlink(source, target);
+    await createLinkCrossPlatform(source, target);
     return;
   }
 
@@ -61,7 +90,7 @@ async function ensureSymlink(target: string, source: string): Promise<void> {
   if (resolvedLinkedPath === source) return;
 
   await fs.unlink(target);
-  await fs.symlink(source, target);
+  await createLinkCrossPlatform(source, target);
 }
 
 async function ensureCopiedFile(target: string, source: string): Promise<void> {

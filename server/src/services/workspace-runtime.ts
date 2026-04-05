@@ -25,7 +25,19 @@ import { readExecutionWorkspaceConfig } from "./execution-workspaces.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
 
 export function resolveShell(): string {
-  return process.env.SHELL?.trim() || (process.platform === "win32" ? "sh" : "/bin/sh");
+  const shellFromEnv = process.env.SHELL?.trim();
+  if (shellFromEnv) return shellFromEnv;
+  if (process.platform === "win32") {
+    return process.env.ComSpec?.trim() || "cmd.exe";
+  }
+  return "/bin/sh";
+}
+
+function resolveShellArgs(command: string): string[] {
+  if (process.platform === "win32") {
+    return ["/d", "/s", "/c", command];
+  }
+  return ["-lc", command];
 }
 
 export interface ExecutionWorkspaceInput {
@@ -386,7 +398,7 @@ async function runWorkspaceCommand(input: {
   const shell = resolveShell();
   const proc = await executeProcess({
     command: shell,
-    args: ["-c", input.command],
+    args: resolveShellArgs(input.command),
     cwd: input.cwd,
     env: input.env,
   });
@@ -482,7 +494,7 @@ async function recordWorkspaceCommandOperation(
       const shell = resolveShell();
       const result = await executeProcess({
         command: shell,
-        args: ["-c", input.command],
+        args: resolveShellArgs(input.command),
         cwd: input.cwd,
         env: input.env,
       });
@@ -1376,7 +1388,7 @@ async function startLocalRuntimeService(input: {
   }
   
   const shell = resolveShell();
-  const child = spawn(shell, ["-lc", command], {
+  const child = spawn(shell, resolveShellArgs(command), {
     cwd: serviceCwd,
     env,
     detached: process.platform !== "win32",

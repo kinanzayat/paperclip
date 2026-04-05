@@ -179,4 +179,44 @@ describe("CommentThread", () => {
       root.unmount();
     });
   });
+
+  it("renders timeline user actor and assignee names from userNameMap", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <CommentThread
+            comments={[]}
+            timelineEvents={[
+              {
+                id: "evt-1",
+                createdAt: new Date("2026-03-11T11:00:00.000Z"),
+                actorType: "user",
+                actorId: "user-2",
+                assigneeChange: {
+                  from: { agentId: null, userId: "user-2" },
+                  to: { agentId: null, userId: "user-3" },
+                },
+              },
+            ]}
+            userNameMap={new Map([
+              ["user-2", "Abood"],
+              ["user-3", "Sara"],
+            ])}
+            currentUserId="user-1"
+            onAdd={async () => {}}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(container.textContent).toContain("Abood");
+    expect(container.textContent).toContain("Sara");
+    expect(container.textContent).not.toContain("user-");
+
+    act(() => {
+      root.unmount();
+    });
+  });
 });

@@ -65,6 +65,7 @@ interface CommentThreadProps {
   onAdd: (body: string, reopen?: boolean, reassignment?: CommentReassignment) => Promise<void>;
   issueStatus?: string;
   agentMap?: Map<string, Agent>;
+  userNameMap?: Map<string, string>;
   currentUserId?: string | null;
   imageUploadHandler?: (file: File) => Promise<string>;
   /** Callback to attach an image file to the parent issue (not inline in a comment). */
@@ -134,12 +135,15 @@ function humanizeValue(value: string | null): string {
 function formatTimelineAssigneeLabel(
   assignee: IssueTimelineAssignee,
   agentMap?: Map<string, Agent>,
+  userNameMap?: Map<string, string>,
   currentUserId?: string | null,
 ) {
   if (assignee.agentId) {
     return agentMap?.get(assignee.agentId)?.name ?? assignee.agentId.slice(0, 8);
   }
   if (assignee.userId) {
+    const resolvedName = userNameMap?.get(assignee.userId);
+    if (resolvedName) return resolvedName;
     return formatAssigneeUserLabel(assignee.userId, currentUserId) ?? "Board";
   }
   return "Unassigned";
@@ -149,6 +153,7 @@ function formatTimelineActorName(
   actorType: IssueTimelineEvent["actorType"],
   actorId: string,
   agentMap?: Map<string, Agent>,
+  userNameMap?: Map<string, string>,
   currentUserId?: string | null,
 ) {
   if (actorType === "agent") {
@@ -157,6 +162,8 @@ function formatTimelineActorName(
   if (actorType === "system") {
     return "System";
   }
+  const resolvedName = userNameMap?.get(actorId);
+  if (resolvedName) return resolvedName;
   return formatAssigneeUserLabel(actorId, currentUserId) ?? "Board";
 }
 
@@ -399,13 +406,15 @@ type TimelineItem =
 function TimelineEventCard({
   event,
   agentMap,
+  userNameMap,
   currentUserId,
 }: {
   event: IssueTimelineEvent;
   agentMap?: Map<string, Agent>;
+  userNameMap?: Map<string, string>;
   currentUserId?: string | null;
 }) {
-  const actorName = formatTimelineActorName(event.actorType, event.actorId, agentMap, currentUserId);
+  const actorName = formatTimelineActorName(event.actorType, event.actorId, agentMap, userNameMap, currentUserId);
 
   return (
     <div id={`activity-${event.id}`} className="flex items-start gap-2.5 py-1.5">
@@ -446,11 +455,11 @@ function TimelineEventCard({
               Assignee
             </span>
             <span className="text-muted-foreground">
-              {formatTimelineAssigneeLabel(event.assigneeChange.from, agentMap, currentUserId)}
+              {formatTimelineAssigneeLabel(event.assigneeChange.from, agentMap, userNameMap, currentUserId)}
             </span>
             <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="font-medium text-foreground">
-              {formatTimelineAssigneeLabel(event.assigneeChange.to, agentMap, currentUserId)}
+              {formatTimelineAssigneeLabel(event.assigneeChange.to, agentMap, userNameMap, currentUserId)}
             </span>
           </div>
         ) : null}
@@ -462,6 +471,7 @@ function TimelineEventCard({
 const TimelineList = memo(function TimelineList({
   timeline,
   agentMap,
+  userNameMap,
   currentUserId,
   companyId,
   projectId,
@@ -474,6 +484,7 @@ const TimelineList = memo(function TimelineList({
 }: {
   timeline: TimelineItem[];
   agentMap?: Map<string, Agent>;
+  userNameMap?: Map<string, string>;
   currentUserId?: string | null;
   companyId?: string | null;
   projectId?: string | null;
@@ -501,6 +512,7 @@ const TimelineList = memo(function TimelineList({
               key={`event:${item.event.id}`}
               event={item.event}
               agentMap={agentMap}
+              userNameMap={userNameMap}
               currentUserId={currentUserId}
             />
           );
@@ -577,6 +589,7 @@ export function CommentThread({
   onVote,
   onAdd,
   agentMap,
+  userNameMap,
   currentUserId,
   imageUploadHandler,
   onAttachImage,
@@ -770,6 +783,7 @@ export function CommentThread({
       <TimelineList
         timeline={timeline}
         agentMap={agentMap}
+        userNameMap={userNameMap}
         currentUserId={currentUserId}
         companyId={companyId}
         projectId={projectId}

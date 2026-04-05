@@ -486,6 +486,14 @@ export function IssueDetail() {
     return map;
   }, [agents]);
 
+  const userNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const member of activeUserMembers(members)) {
+      map.set(member.principalId, memberDisplayName(member, currentUserId));
+    }
+    return map;
+  }, [members, currentUserId]);
+
   const mentionOptions = useMemo<MentionOption[]>(() => {
     const options: MentionOption[] = [];
     const activeAgents = [...(agents ?? [])]
@@ -1592,6 +1600,7 @@ export function IssueDetail() {
             projectId={issue.projectId}
             issueStatus={issue.status}
             agentMap={agentMap}
+            userNameMap={userNameMap}
             currentUserId={currentUserId}
             draftKey={`paperclip:issue-comment-draft:${issue.id}`}
             enableReassign

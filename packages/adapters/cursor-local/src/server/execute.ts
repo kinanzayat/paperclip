@@ -92,8 +92,19 @@ function renderPaperclipEnvNote(env: Record<string, string>): string {
   ].join("\n");
 }
 
+function resolveUserHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  const fromHome = typeof env.HOME === "string" && env.HOME.trim().length > 0 ? env.HOME.trim() : null;
+  if (fromHome) return fromHome;
+  const fromUserProfile =
+    typeof env.USERPROFILE === "string" && env.USERPROFILE.trim().length > 0
+      ? env.USERPROFILE.trim()
+      : null;
+  if (fromUserProfile) return fromUserProfile;
+  return os.homedir();
+}
+
 function cursorSkillsHome(): string {
-  return path.join(os.homedir(), ".cursor", "skills");
+  return path.join(resolveUserHomeDir(), ".cursor", "skills");
 }
 
 type EnsureCursorSkillsInjectedOptions = {
@@ -139,11 +150,10 @@ export async function ensureCursorSkillsInjected(
       `[paperclip] Removed maintainer-only Cursor skill "${skillName}" from ${skillsHome}\n`,
     );
   }
-  const linkSkill = options.linkSkill ?? ((source: string, target: string) => fs.symlink(source, target));
   for (const entry of skillsEntries) {
     const target = path.join(skillsHome, entry.runtimeName);
     try {
-      const result = await ensurePaperclipSkillSymlink(entry.source, target, linkSkill);
+      const result = await ensurePaperclipSkillSymlink(entry.source, target, options.linkSkill);
       if (result === "skipped") continue;
 
       await onLog(

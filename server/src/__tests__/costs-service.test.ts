@@ -72,6 +72,9 @@ const mockBudgetService = vi.hoisted(() => ({
   upsertPolicy: vi.fn(),
   resolveIncident: vi.fn(),
 }));
+const mockAccessService = vi.hoisted(() => ({
+  isCompanyAdmin: vi.fn(),
+}));
 
 vi.mock("../services/index.js", () => ({
   budgetService: () => mockBudgetService,
@@ -79,6 +82,7 @@ vi.mock("../services/index.js", () => ({
   financeService: () => mockFinanceService,
   companyService: () => mockCompanyService,
   agentService: () => mockAgentService,
+  accessService: () => mockAccessService,
   heartbeatService: () => mockHeartbeatService,
   logActivity: mockLogActivity,
 }));
@@ -113,6 +117,7 @@ function createAppWithActor(actor: any) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockAccessService.isCompanyAdmin.mockResolvedValue(true);
   mockCompanyService.update.mockResolvedValue({
     id: "company-1",
     name: "Paperclip",
@@ -222,5 +227,24 @@ describe("cost routes", () => {
 
     expect(res.status).toBe(403);
     expect(mockAgentService.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects company budget updates for non-admin company members", async () => {
+    mockAccessService.isCompanyAdmin.mockResolvedValue(false);
+    const app = createAppWithActor({
+      type: "board",
+      userId: "board-user",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+    });
+
+    const res = await request(app)
+      .patch("/api/companies/company-1/budgets")
+      .send({ budgetMonthlyCents: 2500 });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/company admin required/i);
+    expect(mockCompanyService.update).not.toHaveBeenCalled();
   });
 });

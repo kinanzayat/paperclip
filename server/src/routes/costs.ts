@@ -9,6 +9,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import {
+  accessService,
   budgetService,
   costService,
   financeService,
@@ -19,7 +20,7 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
-import { badRequest } from "../errors.js";
+import { badRequest, forbidden } from "../errors.js";
 
 export function costRoutes(db: Db) {
   const router = Router();
@@ -32,6 +33,19 @@ export function costRoutes(db: Db) {
   const budgets = budgetService(db, budgetHooks);
   const companies = companyService(db);
   const agents = agentService(db);
+  const access = accessService(db);
+
+  async function assertBoardCompanyAdmin(req: Parameters<typeof assertBoard>[0], companyId: string) {
+    assertBoard(req);
+    assertCompanyAccess(req, companyId);
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+      return;
+    }
+    const allowed = await access.isCompanyAdmin(companyId, req.actor.userId);
+    if (!allowed) {
+      throw forbidden("Company admin required");
+    }
+  }
 
   router.post("/companies/:companyId/cost-events", validate(createCostEventSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -64,8 +78,7 @@ export function costRoutes(db: Db) {
 
   router.post("/companies/:companyId/finance-events", validate(createFinanceEventSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
-    assertBoard(req);
+    await assertBoardCompanyAdmin(req, companyId);
 
     const event = await finance.createEvent(companyId, {
       ...req.body,
@@ -194,8 +207,7 @@ export function costRoutes(db: Db) {
 
   router.get("/companies/:companyId/costs/quota-windows", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
-    assertBoard(req);
+    await assertBoardCompanyAdmin(req, companyId);
     // validate companyId resolves to a real company so the "__none__" sentinel
     // and any forged ids are rejected before we touch provider credentials
     const company = await companies.getById(companyId);
@@ -218,9 +230,8 @@ export function costRoutes(db: Db) {
     "/companies/:companyId/budgets/policies",
     validate(upsertBudgetPolicySchema),
     async (req, res) => {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertBoardCompanyAdmin(req, companyId);
       const summary = await budgets.upsertPolicy(companyId, req.body, req.actor.userId ?? "board");
       res.json(summary);
     },
@@ -230,10 +241,9 @@ export function costRoutes(db: Db) {
     "/companies/:companyId/budget-incidents/:incidentId/resolve",
     validate(resolveBudgetIncidentSchema),
     async (req, res) => {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
       const incidentId = req.params.incidentId as string;
-      assertCompanyAccess(req, companyId);
+      await assertBoardCompanyAdmin(req, companyId);
       const incident = await budgets.resolveIncident(companyId, incidentId, req.body, req.actor.userId ?? "board");
       res.json(incident);
     },
@@ -248,9 +258,8 @@ export function costRoutes(db: Db) {
   });
 
   router.patch("/companies/:companyId/budgets", validate(updateBudgetSchema), async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertBoardCompanyAdmin(req, companyId);
     const company = await companies.update(companyId, { budgetMonthlyCents: req.body.budgetMonthlyCents });
     if (!company) {
       res.status(404).json({ error: "Company not found" });

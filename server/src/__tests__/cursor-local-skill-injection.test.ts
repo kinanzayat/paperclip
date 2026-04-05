@@ -12,6 +12,14 @@ async function createSkillDir(root: string, name: string) {
   await fs.mkdir(path.join(root, name), { recursive: true });
 }
 
+async function createDirectoryLink(source: string, target: string) {
+  if (process.platform === "win32") {
+    await fs.symlink(source, target, "junction");
+    return;
+  }
+  await fs.symlink(source, target);
+}
+
 describe("cursor local adapter skill injection", () => {
   const cleanupDirs = new Set<string>();
 
@@ -91,7 +99,7 @@ describe("cursor local adapter skill injection", () => {
           if (target.endsWith(`${path.sep}fail-skill`)) {
             throw new Error("simulated link failure");
           }
-          await fs.symlink(source, target);
+          await createDirectoryLink(source, target);
         },
       },
     );

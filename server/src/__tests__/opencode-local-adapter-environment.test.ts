@@ -64,10 +64,10 @@ describe("opencode_local environment diagnostics", () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-opencode-env-probe-bin-"));
     const fakeOpencode = path.join(binDir, "opencode");
     const script = [
-      "#!/bin/sh",
-      "echo 'ProviderModelNotFoundError: ProviderModelNotFoundError' 1>&2",
-      "echo 'data: { providerID: \"openai\", modelID: \"gpt-5.3-codex\", suggestions: [] }' 1>&2",
-      "exit 1",
+      "#!/usr/bin/env node",
+      "console.error('ProviderModelNotFoundError: ProviderModelNotFoundError');",
+      "console.error('data: { providerID: \"openai\", modelID: \"gpt-5.3-codex\", suggestions: [] }');",
+      "process.exit(1);",
       "",
     ].join("\n");
 
