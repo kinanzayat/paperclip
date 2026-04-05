@@ -5,6 +5,10 @@
  * agent status dots, etc.) should import from here so colors stay consistent.
  */
 
+import type { CompanyIssueStatus } from "@paperclipai/shared";
+import { DEFAULT_ISSUE_STATUSES } from "@paperclipai/shared";
+import { hexToRgb, pickTextColorForPillBg } from "./color-contrast";
+
 // ---------------------------------------------------------------------------
 // Issue status colors
 // ---------------------------------------------------------------------------
@@ -34,6 +38,99 @@ export const issueStatusText: Record<string, string> = {
 };
 
 export const issueStatusTextDefault = "text-muted-foreground";
+
+const fallbackIssueStatuses = new Map<string, CompanyIssueStatus>(
+  DEFAULT_ISSUE_STATUSES.map((status, index) => [
+    status.slug,
+    {
+      id: `default-${status.slug}`,
+      companyId: "__default__",
+      slug: status.slug,
+      label: status.label,
+      category: status.category,
+      color: status.color,
+      position: status.position ?? index,
+      isDefault: status.isDefault,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    } satisfies CompanyIssueStatus,
+  ]),
+);
+
+function toRgba(hexColor: string, alpha: number): string | null {
+  const rgb = hexToRgb(hexColor);
+  if (!rgb) return null;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+}
+
+export function humanizeStatusLabel(status: string): string {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function resolveIssueStatus(
+  status: string,
+  options?: {
+    statusDetails?: CompanyIssueStatus | null;
+    statuses?: CompanyIssueStatus[] | null;
+  },
+): CompanyIssueStatus | null {
+  if (options?.statusDetails && options.statusDetails.slug === status) {
+    return options.statusDetails;
+  }
+  if (options?.statuses) {
+    const matched = options.statuses.find((entry) => entry.slug === status);
+    if (matched) return matched;
+  }
+  return fallbackIssueStatuses.get(status) ?? null;
+}
+
+export function issueStatusLabel(
+  status: string,
+  options?: {
+    statusDetails?: CompanyIssueStatus | null;
+    statuses?: CompanyIssueStatus[] | null;
+  },
+): string {
+  return resolveIssueStatus(status, options)?.label ?? humanizeStatusLabel(status);
+}
+
+export function issueStatusColor(
+  status: string,
+  options?: {
+    statusDetails?: CompanyIssueStatus | null;
+    statuses?: CompanyIssueStatus[] | null;
+  },
+): string | null {
+  return resolveIssueStatus(status, options)?.color ?? null;
+}
+
+export function issueStatusCategory(
+  status: string,
+  options?: {
+    statusDetails?: CompanyIssueStatus | null;
+    statuses?: CompanyIssueStatus[] | null;
+  },
+): CompanyIssueStatus["category"] | null {
+  return resolveIssueStatus(status, options)?.category ?? null;
+}
+
+export function issueStatusBadgeStyle(
+  status: string,
+  options?: {
+    statusDetails?: CompanyIssueStatus | null;
+    statuses?: CompanyIssueStatus[] | null;
+  },
+) {
+  const color = issueStatusColor(status, options);
+  if (!color) return undefined;
+  const backgroundColor = toRgba(color, 0.18);
+  if (!backgroundColor) return undefined;
+  return {
+    borderColor: color,
+    backgroundColor,
+    color: pickTextColorForPillBg(color, 0.18),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Badge colors — used by StatusBadge for all entity types

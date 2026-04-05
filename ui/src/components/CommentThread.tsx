@@ -224,6 +224,7 @@ function CopyMarkdownButton({ text }: { text: string }) {
 function CommentCard({
   comment,
   agentMap,
+  currentUserId,
   companyId,
   projectId,
   feedbackVote = null,
@@ -236,6 +237,7 @@ function CommentCard({
 }: {
   comment: CommentWithRunMeta;
   agentMap?: Map<string, Agent>;
+  currentUserId?: string | null;
   companyId?: string | null;
   projectId?: string | null;
   feedbackVote?: FeedbackVoteValue | null;
@@ -252,6 +254,18 @@ function CommentCard({
   const isHighlighted = highlightCommentId === comment.id;
   const isPending = comment.clientStatus === "pending";
   const isQueued = queued || comment.queueState === "queued" || comment.clientStatus === "queued";
+  const isCurrentUserComment = Boolean(
+    currentUserId &&
+    comment.authorUserId &&
+    comment.authorUserId === currentUserId,
+  );
+  const boardLabel = formatAssigneeUserLabel(comment.authorUserId, currentUserId) ?? "Board";
+  const userDisplayName =
+    comment.authorType === "system"
+      ? "System"
+      : isCurrentUserComment
+        ? "You"
+        : comment.authorName?.trim() || boardLabel;
 
   return (
     <div
@@ -274,7 +288,11 @@ function CommentCard({
             />
           </Link>
         ) : (
-          <Identity name="You" size="sm" />
+          <Identity
+            name={userDisplayName}
+            avatarUrl={comment.authorType === "user" ? comment.authorImage ?? null : null}
+            size="sm"
+          />
         )}
         <span className="flex items-center gap-1.5">
           {isQueued ? (
@@ -530,6 +548,7 @@ const TimelineList = memo(function TimelineList({
             key={comment.id}
             comment={comment}
             agentMap={agentMap}
+            currentUserId={currentUserId}
             companyId={companyId}
             projectId={projectId}
             feedbackVote={feedbackVoteByTargetId?.get(comment.id) ?? null}
@@ -788,6 +807,7 @@ export function CommentThread({
                 key={comment.id}
                 comment={comment}
                 agentMap={agentMap}
+                currentUserId={currentUserId}
                 companyId={companyId}
                 projectId={projectId}
                 highlightCommentId={highlightCommentId}

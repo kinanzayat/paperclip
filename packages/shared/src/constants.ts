@@ -108,26 +108,96 @@ export const AGENT_ICON_NAMES = [
 ] as const;
 export type AgentIconName = (typeof AGENT_ICON_NAMES)[number];
 
-export const ISSUE_STATUSES = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "in_review",
-  "done",
+export const ISSUE_STATUS_CATEGORIES = [
+  "unstarted",
+  "started",
   "blocked",
+  "completed",
   "cancelled",
 ] as const;
-export type IssueStatus = (typeof ISSUE_STATUSES)[number];
+export type IssueStatusCategory = (typeof ISSUE_STATUS_CATEGORIES)[number];
 
-export const INBOX_MINE_ISSUE_STATUSES = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "in_review",
-  "blocked",
-  "done",
-] as const;
-export const INBOX_MINE_ISSUE_STATUS_FILTER = INBOX_MINE_ISSUE_STATUSES.join(",");
+export const DEFAULT_ISSUE_STATUSES = [
+  {
+    slug: "backlog",
+    label: "Backlog",
+    category: "unstarted",
+    color: "#64748b",
+    position: 0,
+    isDefault: true,
+  },
+  {
+    slug: "todo",
+    label: "Todo",
+    category: "unstarted",
+    color: "#2563eb",
+    position: 1,
+    isDefault: false,
+  },
+  {
+    slug: "in_progress",
+    label: "In Progress",
+    category: "started",
+    color: "#8b5cf6",
+    position: 2,
+    isDefault: true,
+  },
+  {
+    slug: "in_review",
+    label: "In Review",
+    category: "started",
+    color: "#f59e0b",
+    position: 3,
+    isDefault: false,
+  },
+  {
+    slug: "blocked",
+    label: "Blocked",
+    category: "blocked",
+    color: "#ef4444",
+    position: 4,
+    isDefault: true,
+  },
+  {
+    slug: "done",
+    label: "Done",
+    category: "completed",
+    color: "#10b981",
+    position: 5,
+    isDefault: true,
+  },
+  {
+    slug: "cancelled",
+    label: "Cancelled",
+    category: "cancelled",
+    color: "#6b7280",
+    position: 6,
+    isDefault: true,
+  },
+] as const satisfies ReadonlyArray<{
+  slug: string;
+  label: string;
+  category: IssueStatusCategory;
+  color: string;
+  position: number;
+  isDefault: boolean;
+}>;
+
+export const ISSUE_STATUSES = DEFAULT_ISSUE_STATUSES.map((status) => status.slug) as [
+  typeof DEFAULT_ISSUE_STATUSES[number]["slug"],
+  ...Array<typeof DEFAULT_ISSUE_STATUSES[number]["slug"]>,
+];
+export type DefaultIssueStatus = (typeof ISSUE_STATUSES)[number];
+export type IssueStatus = DefaultIssueStatus | (string & {});
+
+export const DEFAULT_INBOX_MINE_ISSUE_STATUSES = DEFAULT_ISSUE_STATUSES
+  .filter((status) => status.category !== "cancelled")
+  .map((status) => status.slug) as [
+    typeof DEFAULT_ISSUE_STATUSES[number]["slug"],
+    ...Array<typeof DEFAULT_ISSUE_STATUSES[number]["slug"]>,
+  ];
+export const INBOX_MINE_ISSUE_STATUSES = DEFAULT_INBOX_MINE_ISSUE_STATUSES;
+export const INBOX_MINE_ISSUE_STATUS_FILTER = DEFAULT_INBOX_MINE_ISSUE_STATUSES.join(",");
 
 export const ISSUE_PRIORITIES = ["critical", "high", "medium", "low"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
@@ -338,6 +408,9 @@ export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
 
 export const MEMBERSHIP_STATUSES = ["pending", "active", "suspended"] as const;
 export type MembershipStatus = (typeof MEMBERSHIP_STATUSES)[number];
+
+export const COMPANY_MEMBERSHIP_ROLES = ["admin", "member"] as const;
+export type CompanyMembershipRole = (typeof COMPANY_MEMBERSHIP_ROLES)[number];
 
 export const INSTANCE_USER_ROLES = ["instance_admin"] as const;
 export type InstanceUserRole = (typeof INSTANCE_USER_ROLES)[number];

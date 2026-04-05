@@ -8,6 +8,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
+import { accessApi } from "../api/access";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
 import { usePanel } from "../context/PanelContext";
@@ -31,6 +32,7 @@ import {
   type IssueCommentReassignment,
   type OptimisticIssueComment,
 } from "../lib/optimistic-issue-comments";
+import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { relativeTime, cn, formatTokens, visibleRunCostUsd } from "../lib/utils";
 import { InlineEditor } from "../components/InlineEditor";
@@ -76,6 +78,7 @@ import {
   isClosedIsolatedExecutionWorkspace,
   type ActivityEvent,
   type Agent,
+  type CompanyMembership,
   type FeedbackVote,
   type Issue,
   type IssueAttachment,
@@ -284,6 +287,31 @@ function ActorIdentity({ evt, agentMap }: { evt: ActivityEvent; agentMap: Map<st
   return <Identity name={id || "Unknown"} size="sm" />;
 }
 
+function activeUserMembers(members: CompanyMembership[] | undefined) {
+  return (members ?? []).filter(
+    (member) => member.status === "active" && member.principalType === "user",
+  );
+}
+
+function memberDisplayName(member: CompanyMembership, currentUserId: string | null) {
+  return member.user?.name?.trim()
+    || member.user?.email?.trim()
+    || (member.principalId === "local-board" ? "Board" : null)
+    || (currentUserId && member.principalId === currentUserId ? "You" : null)
+    || member.principalId.slice(0, 8);
+}
+
+function memberMentionSearchText(member: CompanyMembership, currentUserId: string | null) {
+  return [
+    memberDisplayName(member, currentUserId),
+    member.user?.email ?? "",
+    member.principalId,
+    currentUserId && member.principalId === currentUserId ? "me you self" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function IssueDetail() {
   const { issueId } = useParams<{ issueId: string }>();
   const { selectedCompanyId, selectedCompany } = useCompany();
@@ -405,6 +433,11 @@ export function IssueDetail() {
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
   });
+  const { data: members } = useQuery({
+    queryKey: resolvedCompanyId ? queryKeys.access.members(resolvedCompanyId) : ["access", "members", "__disabled__"],
+    queryFn: () => accessApi.listMembers(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId,
+  });
 
   const { data: projects } = useQuery({
     queryKey: queryKeys.projects.list(selectedCompanyId!),
@@ -412,6 +445,7 @@ export function IssueDetail() {
     enabled: !!selectedCompanyId,
   });
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  const { defaultUnstartedStatus } = useCompanyStatuses(resolvedCompanyId);
   const { data: feedbackVotes } = useQuery({
     queryKey: queryKeys.issues.feedbackVotes(issueId!),
     queryFn: () => issuesApi.listFeedbackVotes(issueId!),
@@ -466,6 +500,16 @@ export function IssueDetail() {
         agentIcon: agent.icon,
       });
     }
+    for (const member of activeUserMembers(members)) {
+      options.push({
+        id: `user:${member.principalId}`,
+        name: memberDisplayName(member, currentUserId),
+        kind: "user",
+        userId: member.principalId,
+        userImage: member.user?.image ?? null,
+        searchText: memberMentionSearchText(member, currentUserId),
+      });
+    }
     for (const project of orderedProjects) {
       options.push({
         id: `project:${project.id}`,
@@ -476,7 +520,7 @@ export function IssueDetail() {
       });
     }
     return options;
-  }, [agents, orderedProjects]);
+  }, [agents, members, currentUserId, orderedProjects]);
 
   const childIssues = useMemo(() => {
     if (!allIssues || !issue) return [];
@@ -493,11 +537,17 @@ export function IssueDetail() {
     for (const agent of activeAgents) {
       options.push({ id: `agent:${agent.id}`, label: agent.name });
     }
-    if (currentUserId) {
-      options.push({ id: `user:${currentUserId}`, label: "Me" });
+    for (const member of activeUserMembers(members)) {
+      options.push({
+        id: `user:${member.principalId}`,
+        label: currentUserId && member.principalId === currentUserId
+          ? "Me"
+          : memberDisplayName(member, currentUserId),
+        searchText: memberMentionSearchText(member, currentUserId),
+      });
     }
     return options;
-  }, [agents, currentUserId]);
+  }, [agents, members, currentUserId]);
 
   const actualAssigneeValue = useMemo(
     () => assigneeValueFromSelection(issue ?? {}),
@@ -666,6 +716,8 @@ export function IssueDetail() {
             issueId: issue.id,
             body,
             authorUserId: currentUserId,
+            authorName: session?.user?.name ?? null,
+            authorImage: session?.user?.image ?? null,
             clientStatus: queuedComment ? "queued" : "pending",
             queueTargetRunId: queuedComment ? runningIssueRun.id : null,
           })
@@ -677,7 +729,13 @@ export function IssueDetail() {
       if (previousIssue) {
         queryClient.setQueryData(
           queryKeys.issues.detail(issueId!),
-          applyOptimisticIssueCommentUpdate(previousIssue, { reopen }),
+          applyOptimisticIssueCommentUpdate(previousIssue, {
+            reopen,
+            isTerminal:
+              previousIssue.statusDetails?.category === "completed"
+              || previousIssue.statusDetails?.category === "cancelled",
+            reopenedStatus: defaultUnstartedStatus?.slug ?? null,
+          }),
         );
       }
 
@@ -734,7 +792,7 @@ export function IssueDetail() {
         comment: body,
         assigneeAgentId: reassignment.assigneeAgentId,
         assigneeUserId: reassignment.assigneeUserId,
-        ...(reopen ? { status: "todo" } : {}),
+        ...(reopen ? { reopen: true } : {}),
         ...(interrupt ? { interrupt } : {}),
       }),
     onMutate: async ({ body, reopen, reassignment, interrupt }) => {
@@ -749,6 +807,8 @@ export function IssueDetail() {
             issueId: issue.id,
             body,
             authorUserId: currentUserId,
+            authorName: session?.user?.name ?? null,
+            authorImage: session?.user?.image ?? null,
             clientStatus: queuedComment ? "queued" : "pending",
             queueTargetRunId: queuedComment ? runningIssueRun.id : null,
           })
@@ -760,7 +820,14 @@ export function IssueDetail() {
       if (previousIssue) {
         queryClient.setQueryData(
           queryKeys.issues.detail(issueId!),
-          applyOptimisticIssueCommentUpdate(previousIssue, { reopen, reassignment }),
+          applyOptimisticIssueCommentUpdate(previousIssue, {
+            reopen,
+            isTerminal:
+              previousIssue.statusDetails?.category === "completed"
+              || previousIssue.statusDetails?.category === "cancelled",
+            reopenedStatus: defaultUnstartedStatus?.slug ?? null,
+            reassignment,
+          }),
         );
       }
 

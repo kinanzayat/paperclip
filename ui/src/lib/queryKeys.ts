@@ -88,10 +88,15 @@ export const queryKeys = {
   access: {
     joinRequests: (companyId: string, status: string = "pending_approval") =>
       ["access", "join-requests", companyId, status] as const,
+    members: (companyId: string) => ["access", "members", companyId] as const,
     invite: (token: string) => ["access", "invite", token] as const,
+  },
+  statuses: {
+    list: (companyId: string) => ["statuses", companyId] as const,
   },
   auth: {
     session: ["auth", "session"] as const,
+    profile: ["auth", "profile"] as const,
   },
   instance: {
     generalSettings: ["instance", "general-settings"] as const,

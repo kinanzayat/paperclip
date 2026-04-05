@@ -148,3 +148,7 @@ export function useCompany() {
   }
   return ctx;
 }
+
+export function useOptionalCompany() {
+  return useContext(CompanyContext);
+}

@@ -13,6 +13,7 @@ import type {
   ExecutionWorkspaceConfig,
   WorkspaceRuntimeService,
 } from "@paperclipai/shared";
+import { companyStatusService } from "./company-statuses.js";
 import { parseProjectExecutionWorkspacePolicy } from "./execution-workspace-policy.js";
 import {
   listCurrentRuntimeServicesForExecutionWorkspaces,
@@ -22,7 +23,6 @@ import {
 type ExecutionWorkspaceRow = typeof executionWorkspaces.$inferSelect;
 type WorkspaceRuntimeServiceRow = typeof workspaceRuntimeServices.$inferSelect;
 const execFileAsync = promisify(execFile);
-const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -357,6 +357,7 @@ async function loadEffectiveRuntimeServicesByExecutionWorkspace(
 }
 
 export function executionWorkspaceService(db: Db) {
+  const statuses = companyStatusService(db);
   return {
     list: async (companyId: string, filters?: {
       projectId?: string;
@@ -489,9 +490,14 @@ export function executionWorkspaceService(db: Db) {
         && resolvedPrimaryWorkspacePath != null
         && resolvedWorkspacePath === resolvedPrimaryWorkspacePath;
 
+      const statusMap = new Map(
+        (await statuses.list(workspace.companyId)).map((status) => [status.slug, status] as const),
+      );
       const linkedIssueSummaries = linkedIssues.map((issue) => ({
         ...issue,
-        isTerminal: TERMINAL_ISSUE_STATUSES.has(issue.status),
+        isTerminal: Boolean(
+          statusMap.get(issue.status) && statuses.isTerminalCategory(statusMap.get(issue.status)!.category),
+        ),
       }));
 
       const blockingIssues = linkedIssueSummaries.filter((issue) => !issue.isTerminal);

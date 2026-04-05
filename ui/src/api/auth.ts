@@ -1,6 +1,15 @@
+import type { UpdateUserProfile, UserProfile } from "@paperclipai/shared";
+import { api } from "./client";
+
 export type AuthSession = {
   session: { id: string; userId: string };
-  user: { id: string; email: string | null; name: string | null };
+  user: {
+    id: string;
+    email: string | null;
+    name: string | null;
+    image: string | null;
+    isInstanceAdmin: boolean;
+  };
 };
 
 function toSession(value: unknown): AuthSession | null {
@@ -20,6 +29,8 @@ function toSession(value: unknown): AuthSession | null {
       id: user.id,
       email: typeof user.email === "string" ? user.email : null,
       name: typeof user.name === "string" ? user.name : null,
+      image: typeof user.image === "string" ? user.image : null,
+      isInstanceAdmin: user.isInstanceAdmin === true,
     },
   };
 }
@@ -70,5 +81,22 @@ export const authApi = {
 
   signOut: async () => {
     await authPost("/sign-out", {});
+  },
+
+  getProfile: async (): Promise<UserProfile> => api.get<UserProfile>("/auth/profile"),
+
+  updateProfile: async (input: UpdateUserProfile): Promise<UserProfile> =>
+    api.patch<UserProfile>("/auth/profile", input),
+
+  uploadAvatar: async (file: File): Promise<UserProfile> => {
+    const buffer = await file.arrayBuffer();
+    const safeFile = new File([buffer], file.name, { type: file.type });
+    const form = new FormData();
+    form.append("file", safeFile);
+    return api.postForm<UserProfile>("/auth/profile/avatar", form);
+  },
+
+  removeAvatar: async (): Promise<void> => {
+    await api.delete("/auth/profile/avatar");
   },
 };

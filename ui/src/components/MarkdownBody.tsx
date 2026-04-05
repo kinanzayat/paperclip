@@ -108,18 +108,24 @@ export function MarkdownBody({ children, className, resolveImageSrc }: MarkdownB
           ? `/projects/${parsed.projectId}`
           : parsed.kind === "skill"
             ? `/skills/${parsed.skillId}`
-            : `/agents/${parsed.agentId}`;
+            : parsed.kind === "agent"
+              ? `/agents/${parsed.agentId}`
+              : null;
+        const className = cn(
+          "paperclip-mention-chip",
+          `paperclip-mention-chip--${parsed.kind}`,
+          parsed.kind === "project" && "paperclip-project-mention-chip",
+        );
+        const style = mentionChipInlineStyle(parsed);
+        if (!targetHref) {
+          return (
+            <span className={className} data-mention-kind={parsed.kind} style={style}>
+              {linkChildren}
+            </span>
+          );
+        }
         return (
-          <a
-            href={targetHref}
-            className={cn(
-              "paperclip-mention-chip",
-              `paperclip-mention-chip--${parsed.kind}`,
-              parsed.kind === "project" && "paperclip-project-mention-chip",
-            )}
-            data-mention-kind={parsed.kind}
-            style={mentionChipInlineStyle(parsed)}
-          >
+          <a href={targetHref} className={className} data-mention-kind={parsed.kind} style={style}>
             {linkChildren}
           </a>
         );

@@ -1,17 +1,93 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  authUsers,
   companyMemberships,
   instanceUserRoles,
   principalPermissionGrants,
 } from "@paperclipai/db";
-import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
+import {
+  PERMISSION_KEYS,
+  type CompanyMembershipRole,
+  type PermissionKey,
+  type PrincipalType,
+} from "@paperclipai/shared";
+import { conflict } from "../errors.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
   permissionKey: PermissionKey;
   scope?: Record<string, unknown> | null;
 };
+
+const MEMBER_IMPLICIT_PERMISSIONS = new Set<PermissionKey>(["tasks:assign"]);
+const ADMIN_IMPLICIT_PERMISSIONS = new Set<PermissionKey>(PERMISSION_KEYS);
+
+function normalizeMembershipRole(
+  membershipRole: string | null | undefined,
+): CompanyMembershipRole | null {
+  if (membershipRole === "owner") return "admin";
+  if (membershipRole === "admin" || membershipRole === "member") return membershipRole;
+  return null;
+}
+
+function normalizeMembershipRow(row: MembershipRow): MembershipRow {
+  return {
+    ...row,
+    membershipRole: normalizeMembershipRole(row.membershipRole),
+  };
+}
+
+function isActiveUserAdminMembership(row: Pick<MembershipRow, "principalType" | "status" | "membershipRole">): boolean {
+  return (
+    row.principalType === "user" &&
+    row.status === "active" &&
+    normalizeMembershipRole(row.membershipRole) === "admin"
+  );
+}
+
+async function assertCompanyKeepsAnAdmin(
+  executor: Db | any,
+  companyId: string,
+  membershipId: string,
+  nextMembershipRole: string | null,
+  nextStatus: MembershipRow["status"],
+) {
+  const current = await executor
+    .select()
+    .from(companyMemberships)
+    .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.id, membershipId)))
+    .then((rows: MembershipRow[]) => rows[0] ?? null);
+  if (!current || !isActiveUserAdminMembership(current)) return current;
+
+  const nextRole = normalizeMembershipRole(nextMembershipRole);
+  if (current.principalType === "user" && nextStatus === "active" && nextRole === "admin") {
+    return current;
+  }
+
+  const activeUserMemberships = await executor
+    .select({
+      id: companyMemberships.id,
+      principalType: companyMemberships.principalType,
+      status: companyMemberships.status,
+      membershipRole: companyMemberships.membershipRole,
+    })
+    .from(companyMemberships)
+    .where(
+      and(
+        eq(companyMemberships.companyId, companyId),
+        eq(companyMemberships.principalType, "user"),
+        eq(companyMemberships.status, "active"),
+      ),
+    );
+
+  const adminCount = activeUserMemberships.filter(isActiveUserAdminMembership).length;
+  if (adminCount <= 1) {
+    throw conflict("Company must keep at least one active admin");
+  }
+
+  return current;
+}
 
 export function accessService(db: Db) {
   async function isInstanceAdmin(userId: string | null | undefined): Promise<boolean> {
@@ -72,19 +148,59 @@ export function accessService(db: Db) {
   ): Promise<boolean> {
     if (!userId) return false;
     if (await isInstanceAdmin(userId)) return true;
+    const membership = await getMembership(companyId, "user", userId);
+    if (!membership || membership.status !== "active") return false;
+
+    const membershipRole = normalizeMembershipRole(membership.membershipRole);
+    if (membershipRole === "admin" && ADMIN_IMPLICIT_PERMISSIONS.has(permissionKey)) {
+      return true;
+    }
+    if (membershipRole === "member" && MEMBER_IMPLICIT_PERMISSIONS.has(permissionKey)) {
+      return true;
+    }
+
     return hasPermission(companyId, "user", userId, permissionKey);
   }
 
+  async function isCompanyAdmin(
+    companyId: string,
+    userId: string | null | undefined,
+  ): Promise<boolean> {
+    if (!userId) return false;
+    if (await isInstanceAdmin(userId)) return true;
+    const membership = await getMembership(companyId, "user", userId);
+    return Boolean(membership && membership.status === "active" && normalizeMembershipRole(membership.membershipRole) === "admin");
+  }
+
   async function listMembers(companyId: string) {
-    return db
+    const rows = await db
       .select()
       .from(companyMemberships)
       .where(eq(companyMemberships.companyId, companyId))
       .orderBy(sql`${companyMemberships.createdAt} desc`);
+    const userIds = rows
+      .filter((row) => row.principalType === "user")
+      .map((row) => row.principalId);
+    const users = userIds.length === 0
+      ? []
+      : await db
+        .select({
+          id: authUsers.id,
+          name: authUsers.name,
+          email: authUsers.email,
+          image: authUsers.image,
+        })
+        .from(authUsers)
+        .where(inArray(authUsers.id, userIds));
+    const userMap = new Map(users.map((user) => [user.id, user]));
+    return rows.map((row) => ({
+      ...normalizeMembershipRow(row),
+      user: row.principalType === "user" ? (userMap.get(row.principalId) ?? null) : null,
+    }));
   }
 
   async function listActiveUserMemberships(companyId: string) {
-    return db
+    const rows = await db
       .select()
       .from(companyMemberships)
       .where(
@@ -95,6 +211,7 @@ export function accessService(db: Db) {
         ),
       )
       .orderBy(sql`${companyMemberships.createdAt} asc`);
+    return rows.map(normalizeMembershipRow);
   }
 
   async function setMemberPermissions(
@@ -136,7 +253,7 @@ export function accessService(db: Db) {
       }
     });
 
-    return member;
+    return normalizeMembershipRow(member);
   }
 
   async function promoteInstanceAdmin(userId: string) {
@@ -165,20 +282,45 @@ export function accessService(db: Db) {
   }
 
   async function listUserCompanyAccess(userId: string) {
-    return db
+    const rows = await db
       .select()
       .from(companyMemberships)
       .where(and(eq(companyMemberships.principalType, "user"), eq(companyMemberships.principalId, userId)))
       .orderBy(sql`${companyMemberships.createdAt} desc`);
+    const user = await db
+      .select({
+        id: authUsers.id,
+        name: authUsers.name,
+        email: authUsers.email,
+        image: authUsers.image,
+      })
+      .from(authUsers)
+      .where(eq(authUsers.id, userId))
+      .then((result) => result[0] ?? null);
+    return rows.map((row) => ({
+      ...normalizeMembershipRow(row),
+      user,
+    }));
   }
 
   async function setUserCompanyAccess(userId: string, companyIds: string[]) {
     const existing = await listUserCompanyAccess(userId);
     const existingByCompany = new Map(existing.map((row) => [row.companyId, row]));
     const target = new Set(companyIds);
+    const membershipsToDelete = existing.filter((row) => !target.has(row.companyId));
+
+    for (const membership of membershipsToDelete) {
+      await assertCompanyKeepsAnAdmin(
+        db,
+        membership.companyId,
+        membership.id,
+        null,
+        "suspended",
+      );
+    }
 
     await db.transaction(async (tx) => {
-      const toDelete = existing.filter((row) => !target.has(row.companyId)).map((row) => row.id);
+      const toDelete = membershipsToDelete.map((row) => row.id);
       if (toDelete.length > 0) {
         await tx.delete(companyMemberships).where(inArray(companyMemberships.id, toDelete));
       }
@@ -205,18 +347,30 @@ export function accessService(db: Db) {
     membershipRole: string | null = "member",
     status: "pending" | "active" | "suspended" = "active",
   ) {
+    const normalizedMembershipRole = normalizeMembershipRole(membershipRole);
     const existing = await getMembership(companyId, principalType, principalId);
     if (existing) {
-      if (existing.status !== status || existing.membershipRole !== membershipRole) {
+      if (principalType === "user") {
+        await assertCompanyKeepsAnAdmin(
+          db,
+          companyId,
+          existing.id,
+          normalizedMembershipRole,
+          status,
+        );
+      }
+      const existingMembershipRole = normalizeMembershipRole(existing.membershipRole);
+      const requiresRoleNormalization = existing.membershipRole !== normalizedMembershipRole;
+      if (existing.status !== status || existingMembershipRole !== normalizedMembershipRole || requiresRoleNormalization) {
         const updated = await db
           .update(companyMemberships)
-          .set({ status, membershipRole, updatedAt: new Date() })
+          .set({ status, membershipRole: normalizedMembershipRole, updatedAt: new Date() })
           .where(eq(companyMemberships.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? null);
-        return updated ?? existing;
+        return updated ? normalizeMembershipRow(updated) : normalizeMembershipRow(existing);
       }
-      return existing;
+      return normalizeMembershipRow(existing);
     }
 
     return db
@@ -226,10 +380,37 @@ export function accessService(db: Db) {
         principalType,
         principalId,
         status,
-        membershipRole,
+        membershipRole: normalizedMembershipRole,
       })
       .returning()
-      .then((rows) => rows[0]);
+      .then((rows) => normalizeMembershipRow(rows[0]));
+  }
+
+  async function updateMemberRole(
+    companyId: string,
+    memberId: string,
+    membershipRole: CompanyMembershipRole,
+  ) {
+    const member = await assertCompanyKeepsAnAdmin(
+      db,
+      companyId,
+      memberId,
+      membershipRole,
+      "active",
+    );
+    if (!member) return null;
+
+    const updated = await db
+      .update(companyMemberships)
+      .set({
+        membershipRole,
+        updatedAt: new Date(),
+      })
+      .where(eq(companyMemberships.id, member.id))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+
+    return updated ? normalizeMembershipRow(updated) : normalizeMembershipRow(member);
   }
 
   async function setPrincipalGrants(
@@ -272,7 +453,7 @@ export function accessService(db: Db) {
         targetCompanyId,
         "user",
         membership.principalId,
-        membership.membershipRole,
+        normalizeMembershipRole(membership.membershipRole),
         "active",
       );
     }
@@ -362,9 +543,11 @@ export function accessService(db: Db) {
   return {
     isInstanceAdmin,
     canUser,
+    isCompanyAdmin,
     hasPermission,
     getMembership,
     ensureMembership,
+    updateMemberRole,
     listMembers,
     listActiveUserMemberships,
     copyActiveUserMemberships,

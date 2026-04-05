@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CompanyPortabilityFileEntry } from "@paperclipai/shared";
+import {
+  DEFAULT_ISSUE_STATUSES,
+  type CompanyIssueStatus,
+  type CompanyPortabilityFileEntry,
+  type IssueStatusCategory,
+} from "@paperclipai/shared";
 
 const companySvc = {
   getById: vi.fn(),
@@ -64,6 +69,146 @@ const agentInstructionsSvc = {
   materializeManagedBundle: vi.fn(),
 };
 
+const companyStatusState = new Map<string, CompanyIssueStatus[]>();
+
+function cloneStatuses(statuses: CompanyIssueStatus[]) {
+  return statuses.map((status) => ({ ...status }));
+}
+
+function seedCompanyStatuses(companyId: string, statuses?: CompanyIssueStatus[]) {
+  const seeded = cloneStatuses(
+    statuses ?? DEFAULT_ISSUE_STATUSES.map((status, index) => ({
+      id: `${companyId}-status-${status.slug}`,
+      companyId,
+      slug: status.slug,
+      label: status.label,
+      category: status.category,
+      color: status.color,
+      position: status.position ?? index,
+      isDefault: status.isDefault,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    })),
+  );
+  companyStatusState.set(companyId, seeded);
+  return cloneStatuses(seeded);
+}
+
+function getCompanyStatuses(companyId: string) {
+  const existing = companyStatusState.get(companyId);
+  if (existing) return cloneStatuses(existing);
+  return seedCompanyStatuses(companyId);
+}
+
+function persistCompanyStatuses(companyId: string, statuses: CompanyIssueStatus[]) {
+  const normalized = cloneStatuses(statuses)
+    .sort((left, right) => left.position - right.position || left.label.localeCompare(right.label))
+    .map((status, index) => ({ ...status, position: index }));
+  companyStatusState.set(companyId, normalized);
+  return cloneStatuses(normalized);
+}
+
+function ensureCategoryDefault(statuses: CompanyIssueStatus[], category: IssueStatusCategory) {
+  const sameCategory = statuses.filter((status) => status.category === category);
+  if (sameCategory.length === 0) return;
+  if (sameCategory.some((status) => status.isDefault)) return;
+  sameCategory[0]!.isDefault = true;
+}
+
+const companyStatusSvc = {
+  ensureDefaults: vi.fn(async (companyId: string) => getCompanyStatuses(companyId)),
+  list: vi.fn(async (companyId: string) => getCompanyStatuses(companyId)),
+  getBySlug: vi.fn(async (companyId: string, slug: string) =>
+    getCompanyStatuses(companyId).find((status) => status.slug === slug) ?? null),
+  requireBySlug: vi.fn(async (companyId: string, slug: string) => {
+    const status = getCompanyStatuses(companyId).find((entry) => entry.slug === slug) ?? null;
+    if (!status) throw new Error(`Unknown issue status: ${slug}`);
+    return status;
+  }),
+  getDefault: vi.fn(async (companyId: string, category: IssueStatusCategory) => {
+    const statuses = getCompanyStatuses(companyId);
+    return statuses.find((status) => status.category === category && status.isDefault)
+      ?? statuses.find((status) => status.category === category)
+      ?? statuses[0]
+      ?? null;
+  }),
+  create: vi.fn(async (companyId: string, input: {
+    slug: string;
+    label: string;
+    category: IssueStatusCategory;
+    color: string;
+    isDefault?: boolean;
+  }) => {
+    const current = getCompanyStatuses(companyId);
+    const created: CompanyIssueStatus = {
+      id: `${companyId}-status-${input.slug}`,
+      companyId,
+      slug: input.slug,
+      label: input.label,
+      category: input.category,
+      color: input.color,
+      position: current.length,
+      isDefault: Boolean(input.isDefault),
+      createdAt: new Date(0),
+      updatedAt: new Date(),
+    };
+    if (created.isDefault) {
+      for (const status of current) {
+        if (status.category === created.category) status.isDefault = false;
+      }
+    }
+    const next = [...current, created];
+    ensureCategoryDefault(next, created.category);
+    persistCompanyStatuses(companyId, next);
+    return { ...created };
+  }),
+  update: vi.fn(async (companyId: string, statusId: string, input: {
+    slug?: string;
+    label?: string;
+    category?: IssueStatusCategory;
+    color?: string;
+    isDefault?: boolean;
+  }) => {
+    const current = getCompanyStatuses(companyId);
+    const index = current.findIndex((status) => status.id === statusId);
+    if (index < 0) return null;
+    const previous = current[index]!;
+    const nextStatus: CompanyIssueStatus = {
+      ...previous,
+      slug: input.slug ?? previous.slug,
+      label: input.label ?? previous.label,
+      category: input.category ?? previous.category,
+      color: input.color ?? previous.color,
+      isDefault: input.isDefault ?? previous.isDefault,
+      updatedAt: new Date(),
+    };
+    current[index] = nextStatus;
+    if (nextStatus.isDefault) {
+      for (const status of current) {
+        if (status.id !== nextStatus.id && status.category === nextStatus.category) {
+          status.isDefault = false;
+        }
+      }
+    }
+    ensureCategoryDefault(current, previous.category);
+    ensureCategoryDefault(current, nextStatus.category);
+    persistCompanyStatuses(companyId, current);
+    return { ...nextStatus };
+  }),
+  reorder: vi.fn(async (companyId: string, statusIds: string[]) => {
+    const current = getCompanyStatuses(companyId);
+    const byId = new Map(current.map((status) => [status.id, status] as const));
+    const reordered = statusIds
+      .map((statusId, position) => {
+        const status = byId.get(statusId);
+        return status ? { ...status, position } : null;
+      })
+      .filter((status): status is CompanyIssueStatus => status !== null);
+    return persistCompanyStatuses(companyId, reordered);
+  }),
+  isTerminalCategory: (category: IssueStatusCategory) => category === "completed" || category === "cancelled",
+};
+
 vi.mock("../services/companies.js", () => ({
   companyService: () => companySvc,
 }));
@@ -100,6 +245,10 @@ vi.mock("../services/agent-instructions.js", () => ({
   agentInstructionsService: () => agentInstructionsSvc,
 }));
 
+vi.mock("../services/company-statuses.js", () => ({
+  companyStatusService: () => companyStatusSvc,
+}));
+
 vi.mock("../routes/org-chart-svg.js", () => ({
   renderOrgChartPng: vi.fn(async () => Buffer.from("png")),
 }));
@@ -117,6 +266,8 @@ describe("company portability", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    companyStatusState.clear();
+    seedCompanyStatuses("company-1");
     companySvc.getById.mockResolvedValue({
       id: "company-1",
       name: "Paperclip",
@@ -349,7 +500,7 @@ describe("company portability", () => {
         companyId: "company-1",
         principalType: "user",
         principalId: "user-1",
-        membershipRole: "owner",
+        membershipRole: "admin",
         status: "active",
       },
     ]);
@@ -1885,7 +2036,7 @@ describe("company portability", () => {
 
     expect(accessSvc.listActiveUserMemberships).toHaveBeenCalledWith("company-1");
     expect(accessSvc.copyActiveUserMemberships).toHaveBeenCalledWith("company-1", "company-imported");
-    expect(accessSvc.ensureMembership).not.toHaveBeenCalledWith("company-imported", "user", expect.anything(), "owner", "active");
+    expect(accessSvc.ensureMembership).not.toHaveBeenCalledWith("company-imported", "user", expect.anything(), "admin", "active");
     const textOnlyFiles = Object.fromEntries(Object.entries(exported.files).filter(([, v]) => typeof v === "string"));
     expect(companySkillSvc.importPackageFiles).toHaveBeenCalledWith("company-imported", textOnlyFiles, {
       onConflict: "rename",

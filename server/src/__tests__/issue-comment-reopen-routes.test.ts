@@ -28,11 +28,51 @@ const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
 
+const mockCompanyStatusService = vi.hoisted(() => {
+  const resolveCategory = (slug: string) => {
+    switch (slug) {
+      case "done":
+        return "completed";
+      case "cancelled":
+        return "cancelled";
+      case "blocked":
+        return "blocked";
+      case "in_progress":
+      case "in_review":
+        return "started";
+      default:
+        return "unstarted";
+    }
+  };
+
+  const makeStatus = (slug: string) => ({
+    id: `status-${slug}`,
+    companyId: "company-1",
+    slug,
+    label: slug,
+    category: resolveCategory(slug),
+    color: "#64748b",
+    position: 0,
+    isDefault: slug === "todo",
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  });
+
+  return {
+    requireBySlug: vi.fn(async (_companyId: string, slug: string) => makeStatus(slug)),
+    getDefault: vi.fn(async (_companyId: string, category: string) =>
+      makeStatus(category === "unstarted" ? "todo" : "in_progress")),
+    getBySlug: vi.fn(async (_companyId: string, slug: string) => makeStatus(slug)),
+    isTerminalCategory: vi.fn((category: string) => category === "completed" || category === "cancelled"),
+  };
+});
+
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../services/index.js", () => ({
   accessService: () => mockAccessService,
   agentService: () => mockAgentService,
+  companyStatusService: () => mockCompanyStatusService,
   documentService: () => ({}),
   executionWorkspaceService: () => ({}),
   feedbackService: () => ({

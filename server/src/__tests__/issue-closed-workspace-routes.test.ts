@@ -37,6 +37,57 @@ const mockProjectService = vi.hoisted(() => ({
   getById: vi.fn(async () => null),
 }));
 
+const mockCompanyStatusService = vi.hoisted(() => {
+  const resolveCategory = (slug: string) => {
+    switch (slug) {
+      case "done":
+        return "completed";
+      case "cancelled":
+        return "cancelled";
+      case "blocked":
+        return "blocked";
+      case "in_progress":
+      case "in_review":
+        return "started";
+      default:
+        return "unstarted";
+    }
+  };
+
+  const defaultSlugByCategory: Record<string, string> = {
+    unstarted: "todo",
+    started: "in_progress",
+    blocked: "blocked",
+    completed: "done",
+    cancelled: "cancelled",
+  };
+
+  const makeStatus = (companyId: string, slug: string) => ({
+    id: `status-${slug}`,
+    companyId,
+    slug,
+    label: slug,
+    category: resolveCategory(slug),
+    color: "#64748b",
+    position: 0,
+    isDefault: slug === "todo" || slug === "in_progress",
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  });
+
+  return {
+    ensureDefaults: vi.fn(async () => []),
+    getDefault: vi.fn(async (companyId: string, category: string) =>
+      makeStatus(companyId, defaultSlugByCategory[category] ?? "todo")),
+    listSlugsByCategory: vi.fn(async (_companyId: string, category: string) =>
+      category === "blocked" ? ["blocked"] : []),
+    requireBySlug: vi.fn(async (companyId: string, slug: string) => makeStatus(companyId, slug)),
+    getBySlug: vi.fn(async (companyId: string, slug: string) => makeStatus(companyId, slug)),
+    listOpenSlugs: vi.fn(async () => ["backlog", "todo", "in_progress", "blocked"]),
+    isTerminalCategory: vi.fn((category: string) => category === "completed" || category === "cancelled"),
+  };
+});
+
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../services/index.js", () => ({
@@ -44,6 +95,7 @@ vi.mock("../services/index.js", () => ({
   agentService: () => ({
     getById: vi.fn(async () => null),
   }),
+  companyStatusService: () => mockCompanyStatusService,
   documentService: () => ({}),
   executionWorkspaceService: () => mockExecutionWorkspaceService,
   feedbackService: () => ({

@@ -1,4 +1,5 @@
 import type { IssueOriginKind, IssuePriority, IssueStatus } from "../constants.js";
+import type { CompanyIssueStatus } from "./company-status.js";
 import type { Goal } from "./goal.js";
 import type { Project, ProjectWorkspace } from "./project.js";
 import type { ExecutionWorkspace, IssueExecutionWorkspaceSettings } from "./workspace-runtime.js";
@@ -107,6 +108,7 @@ export interface Issue {
   title: string;
   description: string | null;
   status: IssueStatus;
+  statusDetails?: CompanyIssueStatus | null;
   priority: IssuePriority;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
@@ -155,6 +157,9 @@ export interface IssueComment {
   issueId: string;
   authorAgentId: string | null;
   authorUserId: string | null;
+  authorName?: string | null;
+  authorImage?: string | null;
+  authorType?: "agent" | "user" | "system" | null;
   body: string;
   createdAt: Date;
   updatedAt: Date;

@@ -44,6 +44,14 @@ export interface PutFileInput {
   body: Buffer;
 }
 
+export interface PutUserFileInput {
+  userId: string;
+  namespace: string;
+  originalFilename: string | null;
+  contentType: string;
+  body: Buffer;
+}
+
 export interface PutFileResult {
   provider: StorageProviderId;
   objectKey: string;
@@ -56,7 +64,11 @@ export interface PutFileResult {
 export interface StorageService {
   provider: StorageProviderId;
   putFile(input: PutFileInput): Promise<PutFileResult>;
+  putUserFile(input: PutUserFileInput): Promise<PutFileResult>;
   getObject(companyId: string, objectKey: string): Promise<GetObjectResult>;
+  getUserObject(userId: string, objectKey: string): Promise<GetObjectResult>;
   headObject(companyId: string, objectKey: string): Promise<HeadObjectResult>;
+  headUserObject(userId: string, objectKey: string): Promise<HeadObjectResult>;
   deleteObject(companyId: string, objectKey: string): Promise<void>;
+  deleteUserObject(userId: string, objectKey: string): Promise<void>;
 }

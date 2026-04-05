@@ -20,7 +20,12 @@ export interface IssueAssignmentWakeupDeps {
 
 export function queueIssueAssignmentWakeup(input: {
   heartbeat: IssueAssignmentWakeupDeps;
-  issue: { id: string; assigneeAgentId: string | null; status: string };
+  issue: {
+    id: string;
+    assigneeAgentId: string | null;
+    status: string;
+    statusDetails?: { category: string } | null;
+  };
   reason: string;
   mutation: string;
   contextSource: string;
@@ -28,7 +33,13 @@ export function queueIssueAssignmentWakeup(input: {
   requestedByActorId?: string | null;
   rethrowOnError?: boolean;
 }) {
-  if (!input.issue.assigneeAgentId || input.issue.status === "backlog") return;
+  if (
+    !input.issue.assigneeAgentId
+    || input.issue.statusDetails?.category === "unstarted"
+    || (!input.issue.statusDetails && input.issue.status === "backlog")
+  ) {
+    return;
+  }
 
   return input.heartbeat
     .wakeup(input.issue.assigneeAgentId, {

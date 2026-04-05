@@ -19,6 +19,8 @@ describe("optimistic issue comments", () => {
       issueId: "issue-1",
       body: "Working on it",
       authorUserId: "board-1",
+      authorName: "Abood",
+      authorImage: "/avatar.png",
     });
 
     expect(comment.id).toMatch(/^optimistic-/);
@@ -26,6 +28,9 @@ describe("optimistic issue comments", () => {
     expect(comment.clientStatus).toBe("pending");
     expect(comment.authorUserId).toBe("board-1");
     expect(comment.authorAgentId).toBeNull();
+    expect(comment.authorName).toBe("Abood");
+    expect(comment.authorImage).toBe("/avatar.png");
+    expect(comment.authorType).toBe("user");
   });
 
   it("falls back when crypto.randomUUID is unavailable", () => {
@@ -165,6 +170,8 @@ describe("optimistic issue comments", () => {
       },
       {
         reopen: true,
+        isTerminal: true,
+        reopenedStatus: "queued",
         reassignment: {
           assigneeAgentId: null,
           assigneeUserId: "board-2",
@@ -172,7 +179,7 @@ describe("optimistic issue comments", () => {
       },
     );
 
-    expect(next?.status).toBe("todo");
+    expect(next?.status).toBe("queued");
     expect(next?.assigneeAgentId).toBeNull();
     expect(next?.assigneeUserId).toBe("board-2");
   });

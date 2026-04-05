@@ -15,6 +15,25 @@ vi.mock("@/lib/router", () => ({
   useNavigate: () => () => {},
 }));
 
+vi.mock("../hooks/useCompanyStatuses", () => ({
+  useCompanyStatuses: () => ({
+    statuses: [
+      {
+        id: "status-todo",
+        companyId: "company-1",
+        slug: "todo",
+        label: "Todo",
+        category: "unstarted",
+        color: "#2563eb",
+        position: 0,
+        isDefault: true,
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      },
+    ],
+  }),
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 

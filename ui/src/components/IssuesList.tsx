@@ -8,6 +8,8 @@ import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import { groupBy } from "../lib/groupBy";
+import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
+import { issueStatusLabel } from "../lib/status-colors";
 import { formatDate, cn } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { StatusIcon } from "./StatusIcon";
@@ -27,12 +29,7 @@ import type { Issue } from "@paperclipai/shared";
 
 /* ── Helpers ── */
 
-const statusOrder = ["in_progress", "todo", "backlog", "in_review", "blocked", "done", "cancelled"];
 const priorityOrder = ["critical", "high", "medium", "low"];
-
-function statusLabel(status: string): string {
-  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 /* ── View state ── */
 
@@ -62,12 +59,6 @@ const defaultViewState: IssueViewState = {
   collapsedGroups: [],
 };
 
-const quickFilterPresets = [
-  { label: "All", statuses: [] as string[] },
-  { label: "Active", statuses: ["todo", "in_progress", "in_review", "blocked"] },
-  { label: "Backlog", statuses: ["backlog"] },
-  { label: "Done", statuses: ["done", "cancelled"] },
-];
 function getViewState(key: string): IssueViewState {
   try {
     const raw = localStorage.getItem(key);
@@ -110,13 +101,16 @@ function applyFilters(issues: Issue[], state: IssueViewState, currentUserId?: st
   return result;
 }
 
-function sortIssues(issues: Issue[], state: IssueViewState): Issue[] {
+function sortIssues(issues: Issue[], state: IssueViewState, statusOrder: string[]): Issue[] {
   const sorted = [...issues];
   const dir = state.sortDir === "asc" ? 1 : -1;
   sorted.sort((a, b) => {
     switch (state.sortField) {
       case "status":
-        return dir * (statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status));
+        return dir * (
+          (statusOrder.indexOf(a.status) >= 0 ? statusOrder.indexOf(a.status) : Number.MAX_SAFE_INTEGER)
+          - (statusOrder.indexOf(b.status) >= 0 ? statusOrder.indexOf(b.status) : Number.MAX_SAFE_INTEGER)
+        );
       case "priority":
         return dir * (priorityOrder.indexOf(a.priority) - priorityOrder.indexOf(b.priority));
       case "title":
@@ -207,7 +201,34 @@ export function IssuesList({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
   });
+  const {
+    statuses: companyStatuses,
+    defaultUnstartedStatus,
+  } = useCompanyStatuses(selectedCompanyId);
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  const statusOrder = useMemo(() => companyStatuses.map((status) => status.slug), [companyStatuses]);
+  const quickFilterPresets = useMemo(() => {
+    const backlogStatus = companyStatuses.find((status) => status.slug === "backlog") ?? defaultUnstartedStatus;
+    return [
+      { label: "All", statuses: [] as string[] },
+      {
+        label: "Active",
+        statuses: companyStatuses
+          .filter((status) => ["unstarted", "started", "blocked"].includes(status.category))
+          .map((status) => status.slug),
+      },
+      {
+        label: "Backlog",
+        statuses: backlogStatus ? [backlogStatus.slug] : [],
+      },
+      {
+        label: "Done",
+        statuses: companyStatuses
+          .filter((status) => ["completed", "cancelled"].includes(status.category))
+          .map((status) => status.slug),
+      },
+    ];
+  }, [companyStatuses, defaultUnstartedStatus]);
 
   // Scope the storage key per company so folding/view state is independent across companies.
   const scopedKey = selectedCompanyId ? `${viewStateKey}:${selectedCompanyId}` : viewStateKey;
@@ -256,8 +277,8 @@ export function IssuesList({
       ? issues.filter((issue) => matchesIssueSearch(issue, normalizedIssueSearch))
       : issues;
     const filteredByControls = applyFilters(sourceIssues, viewState, currentUserId);
-    return sortIssues(filteredByControls, viewState);
-  }, [issues, viewState, normalizedIssueSearch, currentUserId]);
+    return sortIssues(filteredByControls, viewState, statusOrder);
+  }, [issues, viewState, normalizedIssueSearch, currentUserId, statusOrder]);
 
   const { data: labels } = useQuery({
     queryKey: queryKeys.issues.labels(selectedCompanyId!),
@@ -275,13 +296,21 @@ export function IssuesList({
       const groups = groupBy(filtered, (i) => i.status);
       return statusOrder
         .filter((s) => groups[s]?.length)
-        .map((s) => ({ key: s, label: statusLabel(s), items: groups[s]! }));
+        .map((s) => ({
+          key: s,
+          label: issueStatusLabel(s, { statuses: companyStatuses }),
+          items: groups[s]!,
+        }));
     }
     if (viewState.groupBy === "priority") {
       const groups = groupBy(filtered, (i) => i.priority);
       return priorityOrder
         .filter((p) => groups[p]?.length)
-        .map((p) => ({ key: p, label: statusLabel(p), items: groups[p]! }));
+        .map((p) => ({
+          key: p,
+          label: p.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+          items: groups[p]!,
+        }));
     }
     // assignee
     const groups = groupBy(
@@ -298,7 +327,7 @@ export function IssuesList({
             : (agentName(key) ?? key.slice(0, 8)),
       items: groups[key]!,
     }));
-  }, [filtered, viewState.groupBy, agents, agentName, currentUserId]);
+  }, [filtered, viewState.groupBy, agents, agentName, currentUserId, statusOrder, companyStatuses]);
 
   const newIssueDefaults = useCallback((groupKey?: string) => {
     const defaults: Record<string, string> = {};
@@ -327,6 +356,7 @@ export function IssuesList({
           issues={filtered}
           agents={agents}
           liveIssueIds={liveIssueIds}
+          statuses={companyStatuses}
           onUpdateIssue={onUpdateIssue}
         />
       );
@@ -378,6 +408,8 @@ export function IssuesList({
                 >
                   <StatusIcon
                     status={issue.status}
+                    statusDetails={issue.statusDetails}
+                    statuses={companyStatuses}
                     onChange={(s) => onUpdateIssue(issue.id, { status: s })}
                   />
                 </span>
@@ -393,6 +425,8 @@ export function IssuesList({
                   >
                     <StatusIcon
                       status={issue.status}
+                      statusDetails={issue.statusDetails}
+                      statuses={companyStatuses}
                       onChange={(s) => onUpdateIssue(issue.id, { status: s })}
                     />
                   </span>
@@ -564,6 +598,7 @@ export function IssuesList({
     openNewIssue,
     updateView,
     viewState.collapsedGroups,
+    companyStatuses,
   ]);
 
   return (
@@ -680,8 +715,8 @@ export function IssuesList({
                             checked={viewState.statuses.includes(s)}
                             onCheckedChange={() => updateView({ statuses: toggleInArray(viewState.statuses, s) })}
                           />
-                          <StatusIcon status={s} />
-                          <span className="text-sm">{statusLabel(s)}</span>
+                          <StatusIcon status={s} statuses={companyStatuses} />
+                          <span className="text-sm">{issueStatusLabel(s, { statuses: companyStatuses })}</span>
                         </label>
                       ))}
                     </div>
@@ -700,7 +735,7 @@ export function IssuesList({
                               onCheckedChange={() => updateView({ priorities: toggleInArray(viewState.priorities, p) })}
                             />
                             <PriorityIcon priority={p} />
-                            <span className="text-sm">{statusLabel(p)}</span>
+                            <span className="text-sm">{p.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</span>
                           </label>
                         ))}
                       </div>

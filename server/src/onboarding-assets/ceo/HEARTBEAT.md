@@ -24,9 +24,11 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 
 ## 4. Get Assignments
 
-- `GET /api/companies/{companyId}/issues?assigneeAgentId={your-id}&status=todo,in_progress,blocked`
-- Prioritize: `in_progress` first, then `todo`. Skip `blocked` unless you can unblock it.
-- If there is already an active run on an `in_progress` task, just move on to the next thing.
+- `GET /api/companies/{companyId}/statuses`
+- Use the returned status slugs to identify this company's `started`, `blocked`, and `unstarted` statuses.
+- `GET /api/companies/{companyId}/issues?assigneeAgentId={your-id}&status={started-unstarted-and-blocked-status-slugs}`
+- Prioritize started work first, then unstarted work. Skip blocked work unless you can unblock it.
+- If there is already an active run on a started task, just move on to the next thing.
 - If `PAPERCLIP_TASK_ID` is set and assigned to you, prioritize that task.
 
 ## 5. Checkout and Work
@@ -50,7 +52,7 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 
 ## 8. Exit
 
-- Comment on any in_progress work before exiting.
+- Comment on any started work before exiting.
 - If no assignments and no valid mention-handoff, exit cleanly.
 
 ---

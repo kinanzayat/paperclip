@@ -83,7 +83,8 @@ export const issues = pgTable(
           and ${table.originId} is not null
           and ${table.hiddenAt} is null
           and ${table.executionRunId} is not null
-          and ${table.status} in ('backlog', 'todo', 'in_progress', 'in_review', 'blocked')`,
+          and ${table.completedAt} is null
+          and ${table.cancelledAt} is null`,
       ),
   }),
 );

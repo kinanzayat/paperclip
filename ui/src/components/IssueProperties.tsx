@@ -8,6 +8,7 @@ import { authApi } from "../api/auth";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
+import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { queryKeys } from "../lib/queryKeys";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "../lib/recent-assignees";
@@ -121,6 +122,7 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
   const { selectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
   const companyId = issue.companyId ?? selectedCompanyId;
+  const { statuses: companyStatuses } = useCompanyStatuses(companyId);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const [projectOpen, setProjectOpen] = useState(false);
@@ -494,6 +496,8 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
         <PropertyRow label="Status">
           <StatusIcon
             status={issue.status}
+            statusDetails={issue.statusDetails}
+            statuses={companyStatuses}
             onChange={(status) => onUpdate({ status })}
             showLabel
           />

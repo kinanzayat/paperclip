@@ -4,6 +4,7 @@ import {
   activityLog,
   agents,
   assets,
+  authUsers,
   companies,
   companyMemberships,
   documents,
@@ -21,7 +22,12 @@ import {
   projectWorkspaces,
   projects,
 } from "@paperclipai/db";
-import { extractAgentMentionIds, extractProjectMentionIds, isUuidLike } from "@paperclipai/shared";
+import {
+  extractAgentMentionIds,
+  extractProjectMentionIds,
+  isUuidLike,
+  type CompanyIssueStatus,
+} from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
@@ -33,30 +39,22 @@ import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
-
-const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+import { companyStatusService } from "./company-statuses.js";
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
 
-function assertTransition(from: string, to: string) {
-  if (from === to) return;
-  if (!ALL_ISSUE_STATUSES.includes(to)) {
-    throw conflict(`Unknown issue status: ${to}`);
-  }
-}
-
 function applyStatusSideEffects(
-  status: string | undefined,
+  status: CompanyIssueStatus | undefined,
   patch: Partial<typeof issues.$inferInsert>,
 ): Partial<typeof issues.$inferInsert> {
   if (!status) return patch;
 
-  if (status === "in_progress" && !patch.startedAt) {
+  if ((status.category === "started" || status.category === "blocked") && !patch.startedAt) {
     patch.startedAt = new Date();
   }
-  if (status === "done") {
+  if (status.category === "completed") {
     patch.completedAt = new Date();
   }
-  if (status === "cancelled") {
+  if (status.category === "cancelled") {
     patch.cancelledAt = new Date();
   }
   return patch;
@@ -93,7 +91,8 @@ type IssueActiveRunRow = {
   createdAt: Date;
 };
 type IssueWithLabels = IssueRow & { labels: IssueLabelRow[]; labelIds: string[] };
-type IssueWithLabelsAndRun = IssueWithLabels & { activeRun: IssueActiveRunRow | null };
+type IssueWithStatus = IssueWithLabels & { statusDetails: CompanyIssueStatus | null };
+type IssueWithLabelsAndRun = IssueWithStatus & { activeRun: IssueActiveRunRow | null };
 type IssueUserCommentStats = {
   issueId: string;
   myLastCommentAt: Date | null;
@@ -481,11 +480,76 @@ async function withIssueLabels(dbOrTx: any, rows: IssueRow[]): Promise<IssueWith
   });
 }
 
+async function withIssueCommentAuthors<
+  T extends {
+    authorAgentId: string | null;
+    authorUserId: string | null;
+  },
+>(dbOrTx: any, rows: T[]) {
+  if (rows.length === 0) {
+    return rows.map((row) => ({
+      ...row,
+      authorName: null,
+      authorImage: null,
+      authorType: "system" as const,
+    }));
+  }
+
+  const agentIds = [...new Set(rows.map((row) => row.authorAgentId).filter((value): value is string => Boolean(value)))];
+  const userIds = [...new Set(rows.map((row) => row.authorUserId).filter((value): value is string => Boolean(value)))];
+  const [agentRows, userRows]: [
+    Array<{ id: string; name: string | null }>,
+    Array<{ id: string; name: string | null; image: string | null }>,
+  ] = await Promise.all([
+    agentIds.length > 0
+      ? dbOrTx
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(inArray(agents.id, agentIds))
+      : Promise.resolve([]),
+    userIds.length > 0
+      ? dbOrTx
+        .select({ id: authUsers.id, name: authUsers.name, image: authUsers.image })
+        .from(authUsers)
+        .where(inArray(authUsers.id, userIds))
+      : Promise.resolve([]),
+  ]);
+
+  const agentById = new Map(agentRows.map((row) => [row.id, row] as const));
+  const userById = new Map(userRows.map((row) => [row.id, row] as const));
+
+  return rows.map((row) => {
+    if (row.authorAgentId) {
+      return {
+        ...row,
+        authorName: agentById.get(row.authorAgentId)?.name ?? null,
+        authorImage: null,
+        authorType: "agent" as const,
+      };
+    }
+    if (row.authorUserId) {
+      const author = userById.get(row.authorUserId);
+      return {
+        ...row,
+        authorName: author?.name ?? null,
+        authorImage: author?.image ?? null,
+        authorType: "user" as const,
+      };
+    }
+    return {
+      ...row,
+      authorName: null,
+      authorImage: null,
+      authorType: "system" as const,
+    };
+  });
+}
+
 const ACTIVE_RUN_STATUSES = ["queued", "running"];
 
 async function activeRunMapForIssues(
   dbOrTx: any,
-  issueRows: IssueWithLabels[],
+  issueRows: IssueWithStatus[],
 ): Promise<Map<string, IssueActiveRunRow>> {
   const map = new Map<string, IssueActiveRunRow>();
   const runIds = issueRows
@@ -519,7 +583,7 @@ async function activeRunMapForIssues(
 }
 
 function withActiveRuns(
-  issueRows: IssueWithLabels[],
+  issueRows: IssueWithStatus[],
   runMap: Map<string, IssueActiveRunRow>,
 ): IssueWithLabelsAndRun[] {
   return issueRows.map((row) => ({
@@ -530,6 +594,27 @@ function withActiveRuns(
 
 export function issueService(db: Db) {
   const instanceSettings = instanceSettingsService(db);
+  const statuses = companyStatusService(db);
+
+  async function withIssueStatusDetails<T extends IssueWithLabels>(
+    issueRows: T[],
+    dbOrTx: any = db,
+  ): Promise<Array<T & { statusDetails: CompanyIssueStatus | null }>> {
+    if (issueRows.length === 0) return [];
+    const statusesByCompanyId = new Map<string, Map<string, CompanyIssueStatus>>();
+
+    for (const companyId of new Set(issueRows.map((row) => row.companyId))) {
+      const companyStatusMap = new Map(
+        (await statuses.list(companyId, dbOrTx)).map((status) => [status.slug, status] as const),
+      );
+      statusesByCompanyId.set(companyId, companyStatusMap);
+    }
+
+    return issueRows.map((row) => ({
+      ...row,
+      statusDetails: statusesByCompanyId.get(row.companyId)?.get(row.status) ?? null,
+    }));
+  }
 
   async function getIssueByUuid(id: string) {
     const row = await db
@@ -538,7 +623,8 @@ export function issueService(db: Db) {
       .where(eq(issues.id, id))
       .then((rows) => rows[0] ?? null);
     if (!row) return null;
-    const [enriched] = await withIssueLabels(db, [row]);
+    const withLabels = await withIssueLabels(db, [row]);
+    const [enriched] = await withIssueStatusDetails(withLabels, db);
     return enriched;
   }
 
@@ -549,7 +635,8 @@ export function issueService(db: Db) {
       .where(eq(issues.identifier, identifier.toUpperCase()))
       .then((rows) => rows[0] ?? null);
     if (!row) return null;
-    const [enriched] = await withIssueLabels(db, [row]);
+    const withLabels = await withIssueLabels(db, [row]);
+    const [enriched] = await withIssueStatusDetails(withLabels, db);
     return enriched;
   }
 
@@ -690,6 +777,7 @@ export function issueService(db: Db) {
     actorAgentId: string;
     actorRunId: string;
     expectedCheckoutRunId: string;
+    activeExecutionStatusSlug: string;
   }) {
     const stale = await isTerminalOrMissingHeartbeatRun(input.expectedCheckoutRunId);
     if (!stale) return null;
@@ -706,7 +794,7 @@ export function issueService(db: Db) {
       .where(
         and(
           eq(issues.id, input.issueId),
-          eq(issues.status, "in_progress"),
+          eq(issues.status, input.activeExecutionStatusSlug),
           eq(issues.assigneeAgentId, input.actorAgentId),
           eq(issues.checkoutRunId, input.expectedCheckoutRunId),
         ),
@@ -825,8 +913,9 @@ export function issueService(db: Db) {
           desc(issues.updatedAt),
         );
       const withLabels = await withIssueLabels(db, rows);
-      const runMap = await activeRunMapForIssues(db, withLabels);
-      const withRuns = withActiveRuns(withLabels, runMap);
+      const withStatuses = await withIssueStatusDetails(withLabels, db);
+      const runMap = await activeRunMapForIssues(db, withStatuses);
+      const withRuns = withActiveRuns(withStatuses, runMap);
       if (withRuns.length === 0) {
         return withRuns;
       }
@@ -1096,10 +1185,13 @@ export function issueService(db: Db) {
       if (data.assigneeUserId) {
         await assertAssignableUser(companyId, data.assigneeUserId);
       }
-      if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
-        throw unprocessable("in_progress issues require an assignee");
-      }
       return db.transaction(async (tx) => {
+        const requestedStatus = await statuses.resolveCreateStatus(companyId, issueData.status, tx);
+        const activeExecutionStatus = await statuses.getDefault(companyId, "started", tx);
+        if (requestedStatus.slug === activeExecutionStatus.slug && !data.assigneeAgentId && !data.assigneeUserId) {
+          throw unprocessable(`${requestedStatus.slug} issues require an assignee`);
+        }
+
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;
@@ -1194,6 +1286,7 @@ export function issueService(db: Db) {
 
         const values = {
           ...issueData,
+          status: requestedStatus.slug,
           originKind: issueData.originKind ?? "manual",
           goalId: resolveIssueGoalId({
             projectId: issueData.projectId,
@@ -1209,21 +1302,14 @@ export function issueService(db: Db) {
           issueNumber,
           identifier,
         } as typeof issues.$inferInsert;
-        if (values.status === "in_progress" && !values.startedAt) {
-          values.startedAt = new Date();
-        }
-        if (values.status === "done") {
-          values.completedAt = new Date();
-        }
-        if (values.status === "cancelled") {
-          values.cancelledAt = new Date();
-        }
+        applyStatusSideEffects(requestedStatus, values);
 
         const [issue] = await tx.insert(issues).values(values).returning();
         if (inputLabelIds) {
           await syncIssueLabels(issue.id, companyId, inputLabelIds, tx);
         }
-        const [enriched] = await withIssueLabels(tx, [issue]);
+        const withLabels = await withIssueLabels(tx, [issue]);
+        const [enriched] = await withIssueStatusDetails(withLabels, tx);
         return enriched;
       });
     },
@@ -1244,10 +1330,6 @@ export function issueService(db: Db) {
         delete issueData.executionWorkspaceSettings;
       }
 
-      if (issueData.status) {
-        assertTransition(existing.status, issueData.status);
-      }
-
       const patch: Partial<typeof issues.$inferInsert> = {
         ...issueData,
         updatedAt: new Date(),
@@ -1257,12 +1339,18 @@ export function issueService(db: Db) {
         issueData.assigneeAgentId !== undefined ? issueData.assigneeAgentId : existing.assigneeAgentId;
       const nextAssigneeUserId =
         issueData.assigneeUserId !== undefined ? issueData.assigneeUserId : existing.assigneeUserId;
+      const [nextStatus, activeExecutionStatus] = await Promise.all([
+        issueData.status
+          ? statuses.requireBySlug(existing.companyId, issueData.status)
+          : statuses.requireBySlug(existing.companyId, existing.status),
+        statuses.getDefault(existing.companyId, "started"),
+      ]);
 
       if (nextAssigneeAgentId && nextAssigneeUserId) {
         throw unprocessable("Issue can only have one assignee");
       }
-      if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
-        throw unprocessable("in_progress issues require an assignee");
+      if (nextStatus.slug === activeExecutionStatus.slug && !nextAssigneeAgentId && !nextAssigneeUserId) {
+        throw unprocessable(`${nextStatus.slug} issues require an assignee`);
       }
       if (issueData.assigneeAgentId) {
         await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId);
@@ -1282,14 +1370,14 @@ export function issueService(db: Db) {
         await assertValidExecutionWorkspace(existing.companyId, nextProjectId, nextExecutionWorkspaceId);
       }
 
-      applyStatusSideEffects(issueData.status, patch);
-      if (issueData.status && issueData.status !== "done") {
+      applyStatusSideEffects(issueData.status ? nextStatus : undefined, patch);
+      if (issueData.status && nextStatus.category !== "completed") {
         patch.completedAt = null;
       }
-      if (issueData.status && issueData.status !== "cancelled") {
+      if (issueData.status && nextStatus.category !== "cancelled") {
         patch.cancelledAt = null;
       }
-      if (issueData.status && issueData.status !== "in_progress") {
+      if (issueData.status && nextStatus.slug !== activeExecutionStatus.slug) {
         patch.checkoutRunId = null;
       }
       if (
@@ -1328,7 +1416,8 @@ export function issueService(db: Db) {
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
         }
-        const [enriched] = await withIssueLabels(tx, [updated]);
+        const withLabels = await withIssueLabels(tx, [updated]);
+        const [enriched] = await withIssueStatusDetails(withLabels, tx);
         return enriched;
       });
     },
@@ -1363,11 +1452,17 @@ export function issueService(db: Db) {
         }
 
         if (!removedIssue) return null;
-        const [enriched] = await withIssueLabels(tx, [removedIssue]);
+        const withLabels = await withIssueLabels(tx, [removedIssue]);
+        const [enriched] = await withIssueStatusDetails(withLabels, tx);
         return enriched;
       }),
 
-    checkout: async (id: string, agentId: string, expectedStatuses: string[], checkoutRunId: string | null) => {
+    checkout: async (
+      id: string,
+      agentId: string,
+      expectedStatuses: string[] | undefined,
+      checkoutRunId: string | null,
+    ) => {
       const issueCompany = await db
         .select({ companyId: issues.companyId })
         .from(issues)
@@ -1375,6 +1470,15 @@ export function issueService(db: Db) {
         .then((rows) => rows[0] ?? null);
       if (!issueCompany) throw notFound("Issue not found");
       await assertAssignableAgent(issueCompany.companyId, agentId);
+      const activeExecutionStatus = await statuses.getDefault(issueCompany.companyId, "started");
+      const normalizedExpectedStatuses = [
+        ...new Set(
+          expectedStatuses && expectedStatuses.length > 0
+            ? await Promise.all(expectedStatuses.map((status) => statuses.requireBySlug(issueCompany.companyId, status)))
+              .then((rows) => rows.map((row) => row.slug))
+            : await statuses.listOpenSlugs(issueCompany.companyId),
+        ),
+      ];
 
       const now = new Date();
       const sameRunAssigneeCondition = checkoutRunId
@@ -1393,14 +1497,14 @@ export function issueService(db: Db) {
           assigneeUserId: null,
           checkoutRunId,
           executionRunId: checkoutRunId,
-          status: "in_progress",
+          status: activeExecutionStatus.slug,
           startedAt: now,
           updatedAt: now,
         })
         .where(
           and(
             eq(issues.id, id),
-            inArray(issues.status, expectedStatuses),
+            inArray(issues.status, normalizedExpectedStatuses),
             or(isNull(issues.assigneeAgentId), sameRunAssigneeCondition),
             executionLockCondition,
           ),
@@ -1409,13 +1513,15 @@ export function issueService(db: Db) {
         .then((rows) => rows[0] ?? null);
 
       if (updated) {
-        const [enriched] = await withIssueLabels(db, [updated]);
+        const withLabels = await withIssueLabels(db, [updated]);
+        const [enriched] = await withIssueStatusDetails(withLabels, db);
         return enriched;
       }
 
       const current = await db
         .select({
           id: issues.id,
+          companyId: issues.companyId,
           status: issues.status,
           assigneeAgentId: issues.assigneeAgentId,
           checkoutRunId: issues.checkoutRunId,
@@ -1429,7 +1535,7 @@ export function issueService(db: Db) {
 
       if (
         current.assigneeAgentId === agentId &&
-        current.status === "in_progress" &&
+        current.status === activeExecutionStatus.slug &&
         current.checkoutRunId == null &&
         (current.executionRunId == null || current.executionRunId === checkoutRunId) &&
         checkoutRunId
@@ -1444,7 +1550,7 @@ export function issueService(db: Db) {
           .where(
             and(
               eq(issues.id, id),
-              eq(issues.status, "in_progress"),
+              eq(issues.status, activeExecutionStatus.slug),
               eq(issues.assigneeAgentId, agentId),
               isNull(issues.checkoutRunId),
               or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId)),
@@ -1452,13 +1558,17 @@ export function issueService(db: Db) {
           )
           .returning()
           .then((rows) => rows[0] ?? null);
-        if (adopted) return adopted;
+        if (adopted) {
+          const withLabels = await withIssueLabels(db, [adopted]);
+          const [enriched] = await withIssueStatusDetails(withLabels, db);
+          return enriched;
+        }
       }
 
       if (
         checkoutRunId &&
         current.assigneeAgentId === agentId &&
-        current.status === "in_progress" &&
+        current.status === activeExecutionStatus.slug &&
         current.checkoutRunId &&
         current.checkoutRunId !== checkoutRunId
       ) {
@@ -1467,22 +1577,25 @@ export function issueService(db: Db) {
           actorAgentId: agentId,
           actorRunId: checkoutRunId,
           expectedCheckoutRunId: current.checkoutRunId,
+          activeExecutionStatusSlug: activeExecutionStatus.slug,
         });
         if (adopted) {
           const row = await db.select().from(issues).where(eq(issues.id, id)).then((rows) => rows[0]!);
-          const [enriched] = await withIssueLabels(db, [row]);
+          const withLabels = await withIssueLabels(db, [row]);
+          const [enriched] = await withIssueStatusDetails(withLabels, db);
           return enriched;
         }
       }
 
-      // If this run already owns it and it's in_progress, return it (no self-409)
+      // If this run already owns the active execution status, return it (no self-409).
       if (
         current.assigneeAgentId === agentId &&
-        current.status === "in_progress" &&
+        current.status === activeExecutionStatus.slug &&
         sameRunLock(current.checkoutRunId, checkoutRunId)
       ) {
         const row = await db.select().from(issues).where(eq(issues.id, id)).then((rows) => rows[0]!);
-        const [enriched] = await withIssueLabels(db, [row]);
+        const withLabels = await withIssueLabels(db, [row]);
+        const [enriched] = await withIssueStatusDetails(withLabels, db);
         return enriched;
       }
 
@@ -1499,6 +1612,7 @@ export function issueService(db: Db) {
       const current = await db
         .select({
           id: issues.id,
+          companyId: issues.companyId,
           status: issues.status,
           assigneeAgentId: issues.assigneeAgentId,
           checkoutRunId: issues.checkoutRunId,
@@ -1508,9 +1622,10 @@ export function issueService(db: Db) {
         .then((rows) => rows[0] ?? null);
 
       if (!current) throw notFound("Issue not found");
+      const activeExecutionStatus = await statuses.getDefault(current.companyId, "started");
 
       if (
-        current.status === "in_progress" &&
+        current.status === activeExecutionStatus.slug &&
         current.assigneeAgentId === actorAgentId &&
         sameRunLock(current.checkoutRunId, actorRunId)
       ) {
@@ -1519,7 +1634,7 @@ export function issueService(db: Db) {
 
       if (
         actorRunId &&
-        current.status === "in_progress" &&
+        current.status === activeExecutionStatus.slug &&
         current.assigneeAgentId === actorAgentId &&
         current.checkoutRunId &&
         current.checkoutRunId !== actorRunId
@@ -1529,6 +1644,7 @@ export function issueService(db: Db) {
           actorAgentId,
           actorRunId,
           expectedCheckoutRunId: current.checkoutRunId,
+          activeExecutionStatusSlug: activeExecutionStatus.slug,
         });
 
         if (adopted) {
@@ -1557,12 +1673,16 @@ export function issueService(db: Db) {
         .then((rows) => rows[0] ?? null);
 
       if (!existing) return null;
+      const [activeExecutionStatus, defaultUnstartedStatus] = await Promise.all([
+        statuses.getDefault(existing.companyId, "started"),
+        statuses.getDefault(existing.companyId, "unstarted"),
+      ]);
       if (actorAgentId && existing.assigneeAgentId && existing.assigneeAgentId !== actorAgentId) {
         throw conflict("Only assignee can release issue");
       }
       if (
         actorAgentId &&
-        existing.status === "in_progress" &&
+        existing.status === activeExecutionStatus.slug &&
         existing.assigneeAgentId === actorAgentId &&
         existing.checkoutRunId &&
         !sameRunLock(existing.checkoutRunId, actorRunId ?? null)
@@ -1578,7 +1698,7 @@ export function issueService(db: Db) {
       const updated = await db
         .update(issues)
         .set({
-          status: "todo",
+          status: defaultUnstartedStatus.slug,
           assigneeAgentId: null,
           checkoutRunId: null,
           updatedAt: new Date(),
@@ -1587,7 +1707,8 @@ export function issueService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? null);
       if (!updated) return null;
-      const [enriched] = await withIssueLabels(db, [updated]);
+      const withLabels = await withIssueLabels(db, [updated]);
+      const [enriched] = await withIssueStatusDetails(withLabels, db);
       return enriched;
     },
 
@@ -1611,6 +1732,24 @@ export function issueService(db: Db) {
         })
         .returning();
       return created;
+    },
+
+    updateLabel: async (
+      id: string,
+      data: Partial<Pick<typeof labels.$inferInsert, "name" | "color">>,
+    ) => {
+      const patch: Partial<typeof labels.$inferInsert> = {};
+      if (typeof data.name === "string") patch.name = data.name.trim();
+      if (typeof data.color === "string") patch.color = data.color;
+      const [updated] = await db
+        .update(labels)
+        .set({
+          ...patch,
+          updatedAt: new Date(),
+        })
+        .where(eq(labels.id, id))
+        .returning();
+      return updated ?? null;
     },
 
     deleteLabel: async (id: string) =>
@@ -1671,7 +1810,8 @@ export function issueService(db: Db) {
 
       const comments = limit ? await query.limit(limit) : await query;
       const { censorUsernameInLogs } = await instanceSettings.getGeneral();
-      return comments.map((comment) => redactIssueComment(comment, censorUsernameInLogs));
+      const withAuthors = await withIssueCommentAuthors(db, comments);
+      return withAuthors.map((comment) => redactIssueComment(comment, censorUsernameInLogs));
     },
 
     getCommentCursor: async (issueId: string) => {
@@ -1702,16 +1842,19 @@ export function issueService(db: Db) {
       };
     },
 
-    getComment: (commentId: string) =>
-      instanceSettings.getGeneral().then(({ censorUsernameInLogs }) =>
+    getComment: async (commentId: string) => {
+      const [{ censorUsernameInLogs }, rows] = await Promise.all([
+        instanceSettings.getGeneral(),
         db
-        .select()
-        .from(issueComments)
-        .where(eq(issueComments.id, commentId))
-        .then((rows) => {
-          const comment = rows[0] ?? null;
-          return comment ? redactIssueComment(comment, censorUsernameInLogs) : null;
-        })),
+          .select()
+          .from(issueComments)
+          .where(eq(issueComments.id, commentId)),
+      ]);
+      const comment = rows[0] ?? null;
+      if (!comment) return null;
+      const [withAuthor] = await withIssueCommentAuthors(db, [comment]);
+      return redactIssueComment(withAuthor, censorUsernameInLogs);
+    },
 
     addComment: async (
       issueId: string,
@@ -1748,7 +1891,8 @@ export function issueService(db: Db) {
         .set({ updatedAt: new Date() })
         .where(eq(issues.id, issueId));
 
-      return redactIssueComment(comment, currentUserRedactionOptions.enabled);
+      const [withAuthor] = await withIssueCommentAuthors(db, [comment]);
+      return redactIssueComment(withAuthor, currentUserRedactionOptions.enabled);
     },
 
     createAttachment: async (input: {

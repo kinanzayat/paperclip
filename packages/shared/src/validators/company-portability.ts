@@ -48,6 +48,15 @@ export const portabilitySidebarOrderSchema = z.object({
   projects: z.array(z.string().min(1)).default([]),
 });
 
+export const portabilityStatusManifestEntrySchema = z.object({
+  slug: z.string().min(1),
+  label: z.string().min(1),
+  category: z.string().min(1),
+  color: z.string().min(1),
+  position: z.number().int().nonnegative(),
+  isDefault: z.boolean(),
+});
+
 export const portabilityAgentManifestEntrySchema = z.object({
   slug: z.string().min(1),
   name: z.string().min(1),
@@ -167,6 +176,7 @@ export const portabilityManifestSchema = z.object({
   }),
   company: portabilityCompanyManifestEntrySchema.nullable(),
   sidebar: portabilitySidebarOrderSchema.nullable(),
+  statuses: z.array(portabilityStatusManifestEntrySchema).default([]),
   agents: z.array(portabilityAgentManifestEntrySchema),
   skills: z.array(portabilitySkillManifestEntrySchema).default([]),
   projects: z.array(portabilityProjectManifestEntrySchema).default([]),

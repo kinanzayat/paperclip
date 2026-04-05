@@ -38,6 +38,8 @@ export function createOptimisticIssueComment(params: {
   issueId: string;
   body: string;
   authorUserId: string | null;
+  authorName?: string | null;
+  authorImage?: string | null;
   clientStatus?: OptimisticIssueComment["clientStatus"];
   queueTargetRunId?: string | null;
 }): OptimisticIssueComment {
@@ -50,6 +52,9 @@ export function createOptimisticIssueComment(params: {
     issueId: params.issueId,
     authorAgentId: null,
     authorUserId: params.authorUserId,
+    authorName: params.authorName ?? null,
+    authorImage: params.authorImage ?? null,
+    authorType: params.authorUserId ? "user" : "system",
     body: params.body,
     clientStatus: params.clientStatus ?? "pending",
     queueTargetRunId: params.queueTargetRunId ?? null,
@@ -104,14 +109,16 @@ export function applyOptimisticIssueCommentUpdate(
   issue: Issue | undefined,
   params: {
     reopen?: boolean;
+    isTerminal?: boolean;
+    reopenedStatus?: string | null;
     reassignment?: IssueCommentReassignment;
   },
 ) {
   if (!issue) return issue;
   const nextIssue: Issue = { ...issue };
 
-  if (params.reopen === true && (issue.status === "done" || issue.status === "cancelled")) {
-    nextIssue.status = "todo";
+  if (params.reopen === true && params.isTerminal) {
+    nextIssue.status = params.reopenedStatus?.trim() || issue.status;
   }
 
   if (params.reassignment) {

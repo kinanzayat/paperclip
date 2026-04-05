@@ -1,7 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { INBOX_MINE_ISSUE_STATUS_FILTER } from "@paperclipai/shared";
 import { approvalsApi } from "../api/approvals";
 import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
@@ -13,6 +12,7 @@ import { agentsApi } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { projectsApi } from "../api/projects";
+import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useGeneralSettings } from "../context/GeneralSettingsContext";
@@ -175,7 +175,7 @@ export function InboxIssueMetaLeading({
     <>
       {showStatus ? (
         <span className="hidden shrink-0 sm:inline-flex">
-          <StatusIcon status={issue.status} />
+          <StatusIcon status={issue.status} statusDetails={issue.statusDetails} />
         </span>
       ) : null}
       {showIdentifier ? (
@@ -787,6 +787,7 @@ function JoinRequestInboxRow({
 
 export function Inbox() {
   const { selectedCompanyId } = useCompany();
+  const { statuses: companyStatuses } = useCompanyStatuses(selectedCompanyId);
   const { setBreadcrumbs } = useBreadcrumbs();
   const navigate = useNavigate();
   const location = useLocation();
@@ -825,6 +826,13 @@ export function Inbox() {
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
   });
+  const inboxStatusFilter = useMemo(
+    () => companyStatuses
+      .filter((status) => status.category !== "cancelled")
+      .map((status) => status.slug)
+      .join(","),
+    [companyStatuses],
+  );
 
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -905,9 +913,9 @@ export function Inbox() {
       issuesApi.list(selectedCompanyId!, {
         touchedByUserId: "me",
         inboxArchivedByUserId: "me",
-        status: INBOX_MINE_ISSUE_STATUS_FILTER,
+        status: inboxStatusFilter,
       }),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && inboxStatusFilter.length > 0,
   });
   const {
     data: touchedIssuesRaw = [],
@@ -917,9 +925,9 @@ export function Inbox() {
     queryFn: () =>
       issuesApi.list(selectedCompanyId!, {
         touchedByUserId: "me",
-        status: INBOX_MINE_ISSUE_STATUS_FILTER,
+        status: inboxStatusFilter,
       }),
-    enabled: !!selectedCompanyId,
+    enabled: !!selectedCompanyId && inboxStatusFilter.length > 0,
   });
 
   const { data: heartbeatRuns, isLoading: isRunsLoading } = useQuery({

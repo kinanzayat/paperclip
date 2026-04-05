@@ -17,6 +17,7 @@ import {
   issueDocumentKeySchema,
   restoreIssueDocumentRevisionSchema,
   updateIssueWorkProductSchema,
+  updateIssueLabelSchema,
   upsertIssueDocumentSchema,
   updateIssueSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
@@ -30,6 +31,7 @@ import { validate } from "../middleware/validate.js";
 import {
   accessService,
   agentService,
+  companyStatusService,
   executionWorkspaceService,
   feedbackService,
   goalService,
@@ -45,7 +47,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { forbidden, HttpError, unauthorized } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
@@ -72,6 +74,7 @@ export function issueRoutes(
   const router = Router();
   const svc = issueService(db);
   const access = accessService(db);
+  const statusesSvc = companyStatusService(db);
   const heartbeat = heartbeatService(db);
   const feedback = feedbackService(db);
   const instanceSettings = instanceSettingsService(db);
@@ -107,6 +110,18 @@ export function issueRoutes(
       throw new HttpError(400, `Invalid ${field} query value`);
     }
     return parsed;
+  }
+
+  async function assertCompanyAdmin(req: Request, companyId: string) {
+    assertBoard(req);
+    assertCompanyAccess(req, companyId);
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+      return;
+    }
+    const allowed = await access.isCompanyAdmin(companyId, req.actor.userId);
+    if (!allowed) {
+      throw forbidden("Company admin required");
+    }
   }
 
   async function runSingleFileUpload(req: Request, res: Response) {
@@ -186,7 +201,8 @@ export function issueRoutes(
       res.status(403).json({ error: "Agent authentication required" });
       return false;
     }
-    if (issue.status !== "in_progress" || issue.assigneeAgentId !== actorAgentId) {
+    const activeExecutionStatus = await statusesSvc.getDefault(issue.companyId, "started");
+    if (issue.status !== activeExecutionStatus.slug || issue.assigneeAgentId !== actorAgentId) {
       return true;
     }
     const runId = requireAgentRunId(req, res);
@@ -389,7 +405,7 @@ export function issueRoutes(
 
   router.post("/companies/:companyId/labels", validate(createIssueLabelSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyAdmin(req, companyId);
     const label = await svc.createLabel(companyId, req.body);
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -406,6 +422,34 @@ export function issueRoutes(
     res.status(201).json(label);
   });
 
+  router.patch("/labels/:labelId", validate(updateIssueLabelSchema), async (req, res) => {
+    const labelId = req.params.labelId as string;
+    const existing = await svc.getLabelById(labelId);
+    if (!existing) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    await assertCompanyAdmin(req, existing.companyId);
+    const updated = await svc.updateLabel(labelId, req.body);
+    if (!updated) {
+      res.status(404).json({ error: "Label not found" });
+      return;
+    }
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: updated.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "label.updated",
+      entityType: "label",
+      entityId: updated.id,
+      details: { name: updated.name, color: updated.color },
+    });
+    res.json(updated);
+  });
+
   router.delete("/labels/:labelId", async (req, res) => {
     const labelId = req.params.labelId as string;
     const existing = await svc.getLabelById(labelId);
@@ -413,7 +457,7 @@ export function issueRoutes(
       res.status(404).json({ error: "Label not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyAdmin(req, existing.companyId);
     const removed = await svc.deleteLabel(labelId);
     if (!removed) {
       res.status(404).json({ error: "Label not found" });
@@ -1092,9 +1136,14 @@ export function issueRoutes(
       }
     }
     if (!(await assertAgentRunCheckoutOwnership(req, res, existing))) return;
+    const [existingStatus, defaultUnstartedStatus, backlogStatus] = await Promise.all([
+      statusesSvc.requireBySlug(existing.companyId, existing.status),
+      statusesSvc.getDefault(existing.companyId, "unstarted"),
+      statusesSvc.getBySlug(existing.companyId, "backlog"),
+    ]);
 
     const actor = getActorInfo(req);
-    const isClosed = existing.status === "done" || existing.status === "cancelled";
+    const isClosed = statusesSvc.isTerminalCategory(existingStatus.category);
     const {
       comment: commentBody,
       reopen: reopenRequested,
@@ -1145,7 +1194,7 @@ export function issueRoutes(
       updateFields.hiddenAt = hiddenAtRaw ? new Date(hiddenAtRaw) : null;
     }
     if (commentBody && reopenRequested === true && isClosed && updateFields.status === undefined) {
-      updateFields.status = "todo";
+      updateFields.status = defaultUnstartedStatus.slug;
     }
     let issue;
     try {
@@ -1199,7 +1248,7 @@ export function issueRoutes(
       reopenRequested === true &&
       isClosed &&
       previous.status !== undefined &&
-      issue.status === "todo";
+      issue.status === defaultUnstartedStatus.slug;
     const reopenFromStatus = reopened ? existing.status : null;
     await logActivity(db, {
       companyId: issue.companyId,
@@ -1220,7 +1269,10 @@ export function issueRoutes(
       },
     });
 
-    if (issue.status === "done" && existing.status !== "done") {
+    if (
+      issue.statusDetails?.category === "completed" &&
+      existingStatus.category !== "completed"
+    ) {
       const tc = getTelemetryClient();
       if (tc && actor.agentId) {
         const actorAgent = await agentsSvc.getById(actor.agentId);
@@ -1262,15 +1314,19 @@ export function issueRoutes(
 
     const assigneeChanged = assigneeWillChange;
     const statusChangedFromBacklog =
-      existing.status === "backlog" &&
-      issue.status !== "backlog" &&
+      existing.status === (backlogStatus?.slug ?? defaultUnstartedStatus.slug) &&
+      issue.status !== (backlogStatus?.slug ?? defaultUnstartedStatus.slug) &&
       req.body.status !== undefined;
 
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
     void (async () => {
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
 
-      if (assigneeChanged && issue.assigneeAgentId && issue.status !== "backlog") {
+      if (
+        assigneeChanged &&
+        issue.assigneeAgentId &&
+        issue.status !== (backlogStatus?.slug ?? defaultUnstartedStatus.slug)
+      ) {
         wakeups.set(issue.assigneeAgentId, {
           source: "assignment",
           triggerDetail: "system",
@@ -1645,18 +1701,22 @@ export function issueRoutes(
       respondClosedIssueExecutionWorkspace(res, closedExecutionWorkspace);
       return;
     }
+    const [currentStatus, defaultUnstartedStatus] = await Promise.all([
+      statusesSvc.requireBySlug(issue.companyId, issue.status),
+      statusesSvc.getDefault(issue.companyId, "unstarted"),
+    ]);
 
     const actor = getActorInfo(req);
     const reopenRequested = req.body.reopen === true;
     const interruptRequested = req.body.interrupt === true;
-    const isClosed = issue.status === "done" || issue.status === "cancelled";
+    const isClosed = statusesSvc.isTerminalCategory(currentStatus.category);
     let reopened = false;
     let reopenFromStatus: string | null = null;
     let interruptedRunId: string | null = null;
     let currentIssue = issue;
 
     if (reopenRequested && isClosed) {
-      const reopenedIssue = await svc.update(id, { status: "todo" });
+      const reopenedIssue = await svc.update(id, { status: defaultUnstartedStatus.slug });
       if (!reopenedIssue) {
         res.status(404).json({ error: "Issue not found" });
         return;
@@ -1675,7 +1735,7 @@ export function issueRoutes(
         entityType: "issue",
         entityId: currentIssue.id,
         details: {
-          status: "todo",
+          status: defaultUnstartedStatus.slug,
           reopened: true,
           reopenedFrom: reopenFromStatus,
           source: "comment",

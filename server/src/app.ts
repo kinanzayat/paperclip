@@ -25,14 +25,17 @@ import { activityRoutes } from "./routes/activity.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { statusRoutes } from "./routes/statuses.js";
 import { llmRoutes } from "./routes/llms.js";
 import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
+import { profileRoutes } from "./routes/profile.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
+import { getAuthUserById, toUserProfile } from "./auth/profile.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
@@ -115,23 +118,37 @@ export async function createApp(
       resolveSession: opts.resolveSession,
     }),
   );
-  app.get("/api/auth/get-session", (req, res) => {
+  app.get("/api/auth/get-session", async (req, res) => {
     if (req.actor.type !== "board" || !req.actor.userId) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    res.json({
-      session: {
-        id: `paperclip:${req.actor.source}:${req.actor.userId}`,
-        userId: req.actor.userId,
-      },
-      user: {
-        id: req.actor.userId,
-        email: null,
-        name: req.actor.source === "local_implicit" ? "Local Board" : null,
-      },
-    });
+    try {
+      const user = await getAuthUserById(db, req.actor.userId);
+      if (!user) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      const profile = toUserProfile(user, { isInstanceAdmin: Boolean(req.actor.isInstanceAdmin) });
+      res.json({
+        session: {
+          id: `paperclip:${req.actor.source}:${req.actor.userId}`,
+          userId: req.actor.userId,
+        },
+        user: {
+          id: req.actor.userId,
+          email: profile.email,
+          name: profile.name,
+          image: profile.image,
+          isInstanceAdmin: profile.isInstanceAdmin,
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, "Failed to resolve auth session user payload");
+      res.status(500).json({ error: "Failed to load session" });
+    }
   });
+  app.use("/api/auth/profile", boardMutationGuard(), profileRoutes(db, opts.storageService));
   if (opts.betterAuthHandler) {
     app.all("/api/auth/*authPath", opts.betterAuthHandler);
   }
@@ -165,6 +182,7 @@ export async function createApp(
   api.use(costRoutes(db));
   api.use(activityRoutes(db));
   api.use(dashboardRoutes(db));
+  api.use(statusRoutes(db));
   api.use(sidebarBadgeRoutes(db));
   api.use(instanceSettingsRoutes(db));
   const hostServicesDisposers = new Map<string, () => void>();

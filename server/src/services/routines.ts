@@ -41,10 +41,9 @@ import { parseCron, validateCron } from "./cron.js";
 import { heartbeatService } from "./heartbeat.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "./issue-assignment-wakeup.js";
 import { logActivity } from "./activity-log.js";
+import { companyStatusService } from "./company-statuses.js";
 
-const OPEN_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked"];
 const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running"];
-const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 const MAX_CATCH_UP_RUNS = 25;
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
@@ -292,6 +291,7 @@ function mergeRoutineRunPayload(
 }
 
 export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeupDeps } = {}) {
+  const statuses = companyStatusService(db);
   const issueSvc = issueService(db);
   const secretsSvc = secretService(db);
   const heartbeat = deps.heartbeat ?? heartbeatService(db);
@@ -379,6 +379,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
 
   async function listLatestRunByRoutineIds(companyId: string, routineIds: string[]) {
     if (routineIds.length === 0) return new Map<string, RoutineRunSummary>();
+    const defaultUnstartedStatus = await statuses.getDefault(companyId, "unstarted");
     const rows = await db
       .selectDistinctOn([routineRuns.routineId], {
         id: routineRuns.id,
@@ -433,7 +434,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
             id: row.linkedIssueId,
             identifier: row.issueIdentifier,
             title: row.issueTitle ?? "Routine execution",
-            status: row.issueStatus ?? "todo",
+            status: row.issueStatus ?? defaultUnstartedStatus.slug,
             priority: row.issuePriority ?? "medium",
             updatedAt: row.issueUpdatedAt ?? row.updatedAt,
           }
@@ -452,6 +453,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
 
   async function listLiveIssueByRoutineIds(companyId: string, routineIds: string[]) {
     if (routineIds.length === 0) return new Map<string, RoutineListItem["activeIssue"]>();
+    const openIssueStatuses = await statuses.listOpenSlugs(companyId);
     const executionBoundRows = await db
       .selectDistinctOn([issues.originId], {
         originId: issues.originId,
@@ -475,7 +477,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
           eq(issues.companyId, companyId),
           eq(issues.originKind, "routine_execution"),
           inArray(issues.originId, routineIds),
-          inArray(issues.status, OPEN_ISSUE_STATUSES),
+          inArray(issues.status, openIssueStatuses),
           isNull(issues.hiddenAt),
         ),
       )
@@ -513,7 +515,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
             eq(issues.companyId, companyId),
             eq(issues.originKind, "routine_execution"),
             inArray(issues.originId, missingRoutineIds),
-            inArray(issues.status, OPEN_ISSUE_STATUSES),
+            inArray(issues.status, openIssueStatuses),
             isNull(issues.hiddenAt),
           ),
         )
@@ -571,6 +573,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
   }
 
   async function findLiveExecutionIssue(routine: typeof routines.$inferSelect, executor: Db = db) {
+    const openIssueStatuses = await statuses.listOpenSlugs(routine.companyId, executor);
     const executionBoundIssue = await executor
       .select()
       .from(issues)
@@ -586,7 +589,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
           eq(issues.companyId, routine.companyId),
           eq(issues.originKind, "routine_execution"),
           eq(issues.originId, routine.id),
-          inArray(issues.status, OPEN_ISSUE_STATUSES),
+          inArray(issues.status, openIssueStatuses),
           isNull(issues.hiddenAt),
         ),
       )
@@ -611,7 +614,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
           eq(issues.companyId, routine.companyId),
           eq(issues.originKind, "routine_execution"),
           eq(issues.originId, routine.id),
-          inArray(issues.status, OPEN_ISSUE_STATUSES),
+          inArray(issues.status, openIssueStatuses),
           isNull(issues.hiddenAt),
         ),
       )
@@ -720,6 +723,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
       const nextRunAt = input.trigger?.kind === "schedule" && input.trigger.cronExpression && input.trigger.timezone
         ? nextCronTickInTimeZone(input.trigger.cronExpression, input.trigger.timezone, triggeredAt)
         : undefined;
+      const defaultUnstartedStatus = await statuses.getDefault(input.routine.companyId, "unstarted", txDb);
 
       let createdIssue: Awaited<ReturnType<typeof issueSvc.create>> | null = null;
       try {
@@ -750,7 +754,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
             parentId: input.routine.parentIssueId,
             title: input.routine.title,
             description,
-            status: "todo",
+            status: defaultUnstartedStatus.slug,
             priority: input.routine.priority,
             assigneeAgentId: input.routine.assigneeAgentId,
             originKind: "routine_execution",
@@ -904,6 +908,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
     getDetail: async (id: string): Promise<RoutineDetail | null> => {
       const row = await getRoutineById(id);
       if (!row) return null;
+      const defaultUnstartedStatus = await statuses.getDefault(row.companyId, "unstarted");
       const [project, assignee, parentIssue, triggers, recentRuns, activeIssue] = await Promise.all([
         db.select().from(projects).where(eq(projects.id, row.projectId)).then((rows) => rows[0] ?? null),
         db.select().from(agents).where(eq(agents.id, row.assigneeAgentId)).then((rows) => rows[0] ?? null),
@@ -962,7 +967,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
                   id: run.linkedIssueId,
                   identifier: run.issueIdentifier,
                   title: run.issueTitle ?? "Routine execution",
-                  status: run.issueStatus ?? "todo",
+                  status: run.issueStatus ?? defaultUnstartedStatus.slug,
                   priority: run.issuePriority ?? "medium",
                   updatedAt: run.issueUpdatedAt ?? run.updatedAt,
                 }
@@ -1316,6 +1321,10 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
 
     listRuns: async (routineId: string, limit = 50): Promise<RoutineRunSummary[]> => {
       const cappedLimit = Math.max(1, Math.min(limit, 200));
+      const routine = await getRoutineById(routineId);
+      const defaultUnstartedStatus = routine
+        ? await statuses.getDefault(routine.companyId, "unstarted")
+        : null;
       const rows = await db
         .select({
           id: routineRuns.id,
@@ -1369,7 +1378,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
             id: row.linkedIssueId,
             identifier: row.issueIdentifier,
             title: row.issueTitle ?? "Routine execution",
-            status: row.issueStatus ?? "todo",
+            status: row.issueStatus ?? defaultUnstartedStatus?.slug ?? "backlog",
             priority: row.issuePriority ?? "medium",
             updatedAt: row.issueUpdatedAt ?? row.updatedAt,
           }
@@ -1454,6 +1463,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
       const issue = await db
         .select({
           id: issues.id,
+          companyId: issues.companyId,
           status: issues.status,
           originKind: issues.originKind,
           originRunId: issues.originRunId,
@@ -1462,13 +1472,14 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
         .where(eq(issues.id, issueId))
         .then((rows) => rows[0] ?? null);
       if (!issue || issue.originKind !== "routine_execution" || !issue.originRunId) return null;
-      if (issue.status === "done") {
+      const issueStatus = await statuses.requireBySlug(issue.companyId, issue.status);
+      if (issueStatus.category === "completed") {
         return finalizeRun(issue.originRunId, {
           status: "completed",
           completedAt: new Date(),
         });
       }
-      if (issue.status === "blocked" || issue.status === "cancelled") {
+      if (issueStatus.category === "blocked" || issueStatus.category === "cancelled") {
         return finalizeRun(issue.originRunId, {
           status: "failed",
           failureReason: `Execution issue moved to ${issue.status}`,

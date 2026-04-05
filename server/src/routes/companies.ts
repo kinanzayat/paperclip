@@ -18,6 +18,7 @@ import {
   accessService,
   agentService,
   budgetService,
+  companyStatusService,
   companyPortabilityService,
   companyService,
   feedbackService,
@@ -32,6 +33,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   const agents = agentService(db);
   const portability = companyPortabilityService(db, storage);
   const access = accessService(db);
+  const statuses = companyStatusService(db);
   const budgets = budgetService(db);
   const feedback = feedbackService(db);
 
@@ -48,9 +50,42 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     return parsed;
   }
 
+  async function assertBoardCompanyAdmin(req: Request, companyId: string) {
+    assertBoard(req);
+    assertCompanyAccess(req, companyId);
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+      return;
+    }
+    const allowed = await access.isCompanyAdmin(companyId, req.actor.userId);
+    if (!allowed) {
+      throw forbidden("Company admin required");
+    }
+  }
+
+  async function assertCanImportTarget(
+    req: Request,
+    target: { mode?: string; companyId?: string },
+  ) {
+    assertBoard(req);
+    if (target.mode === "existing_company") {
+      const targetCompanyId = target.companyId;
+      if (!targetCompanyId) {
+        throw badRequest("Target companyId is required");
+      }
+      await assertBoardCompanyAdmin(req, targetCompanyId);
+      return;
+    }
+    if (!(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)) {
+      throw forbidden("Instance admin required");
+    }
+  }
+
   async function assertCanUpdateBranding(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
-    if (req.actor.type === "board") return;
+    if (req.actor.type === "board") {
+      await assertBoardCompanyAdmin(req, companyId);
+      return;
+    }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
 
     const actorAgent = await agents.getById(req.actor.agentId);
@@ -64,7 +99,10 @@ export function companyRoutes(db: Db, storage?: StorageService) {
 
   async function assertCanManagePortability(req: Request, companyId: string, capability: "imports" | "exports") {
     assertCompanyAccess(req, companyId);
-    if (req.actor.type === "board") return;
+    if (req.actor.type === "board") {
+      await assertBoardCompanyAdmin(req, companyId);
+      return;
+    }
     if (!req.actor.agentId) throw forbidden("Agent authentication required");
 
     const actorAgent = await agents.getById(req.actor.agentId);
@@ -153,25 +191,19 @@ export function companyRoutes(db: Db, storage?: StorageService) {
 
   router.post("/:companyId/export", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertBoardCompanyAdmin(req, companyId);
     const result = await portability.exportBundle(companyId, req.body);
     res.json(result);
   });
 
   router.post("/import/preview", validate(companyPortabilityPreviewSchema), async (req, res) => {
-    assertBoard(req);
-    if (req.body.target.mode === "existing_company") {
-      assertCompanyAccess(req, req.body.target.companyId);
-    }
+    await assertCanImportTarget(req, req.body.target);
     const preview = await portability.previewImport(req.body);
     res.json(preview);
   });
 
   router.post("/import", validate(companyPortabilityImportSchema), async (req, res) => {
-    assertBoard(req);
-    if (req.body.target.mode === "existing_company") {
-      assertCompanyAccess(req, req.body.target.companyId);
-    }
+    await assertCanImportTarget(req, req.body.target);
     const actor = getActorInfo(req);
     const result = await portability.importBundle(req.body, req.actor.type === "board" ? req.actor.userId : null);
     await logActivity(db, {
@@ -263,7 +295,8 @@ export function companyRoutes(db: Db, storage?: StorageService) {
       throw forbidden("Instance admin required");
     }
     const company = await svc.create(req.body);
-    await access.ensureMembership(company.id, "user", req.actor.userId ?? "local-board", "owner", "active");
+    await statuses.ensureDefaults(company.id);
+    await access.ensureMembership(company.id, "user", req.actor.userId ?? "local-board", "admin", "active");
     await logActivity(db, {
       companyId: company.id,
       actorType: "user",
@@ -312,7 +345,7 @@ export function companyRoutes(db: Db, storage?: StorageService) {
       }
       body = updateCompanyBrandingSchema.parse(req.body);
     } else {
-      assertBoard(req);
+      await assertBoardCompanyAdmin(req, companyId);
       body = updateCompanySchema.parse(req.body);
 
       if (body.feedbackDataSharingEnabled === true && !existingCompany.feedbackDataSharingEnabled) {
@@ -371,9 +404,8 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   });
 
   router.post("/:companyId/archive", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertBoardCompanyAdmin(req, companyId);
     const company = await svc.archive(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -391,9 +423,8 @@ export function companyRoutes(db: Db, storage?: StorageService) {
   });
 
   router.delete("/:companyId", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertBoardCompanyAdmin(req, companyId);
     const company = await svc.remove(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });

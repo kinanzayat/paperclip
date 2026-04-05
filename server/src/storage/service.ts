@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import type { StorageService, StorageProvider, PutFileInput, PutFileResult } from "./types.js";
+import type {
+  StorageService,
+  StorageProvider,
+  PutFileInput,
+  PutFileResult,
+  PutUserFileInput,
+} from "./types.js";
 import { badRequest, forbidden, unprocessable } from "../errors.js";
 
 const MAX_SEGMENT_LENGTH = 120;
@@ -53,6 +59,16 @@ function ensureCompanyPrefix(companyId: string, objectKey: string): void {
   }
 }
 
+function ensureUserPrefix(userId: string, objectKey: string): void {
+  const expectedPrefix = `users/${sanitizeSegment(userId)}/`;
+  if (!objectKey.startsWith(expectedPrefix)) {
+    throw forbidden("Object does not belong to user");
+  }
+  if (objectKey.includes("..")) {
+    throw badRequest("Invalid object key");
+  }
+}
+
 function hashBuffer(input: Buffer): string {
   return createHash("sha256").update(input).digest("hex");
 }
@@ -69,9 +85,39 @@ function buildObjectKey(companyId: string, namespace: string, originalFilename: 
   return `${companyId}/${ns}/${year}/${month}/${day}/${filename}`;
 }
 
+function buildUserObjectKey(userId: string, namespace: string, originalFilename: string | null): string {
+  const ns = normalizeNamespace(namespace);
+  const now = new Date();
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const { stem, ext } = splitFilename(originalFilename);
+  const suffix = randomUUID();
+  const filename = `${suffix}-${stem}${ext}`;
+  return `users/${sanitizeSegment(userId)}/${ns}/${year}/${month}/${day}/${filename}`;
+}
+
 function assertPutFileInput(input: PutFileInput): void {
   if (!input.companyId || input.companyId.trim().length === 0) {
     throw unprocessable("companyId is required");
+  }
+  if (!input.namespace || input.namespace.trim().length === 0) {
+    throw unprocessable("namespace is required");
+  }
+  if (!input.contentType || input.contentType.trim().length === 0) {
+    throw unprocessable("contentType is required");
+  }
+  if (!(input.body instanceof Buffer)) {
+    throw unprocessable("body must be a Buffer");
+  }
+  if (input.body.length <= 0) {
+    throw unprocessable("File is empty");
+  }
+}
+
+function assertPutUserFileInput(input: PutUserFileInput): void {
+  if (!input.userId || input.userId.trim().length === 0) {
+    throw unprocessable("userId is required");
   }
   if (!input.namespace || input.namespace.trim().length === 0) {
     throw unprocessable("namespace is required");
@@ -113,8 +159,35 @@ export function createStorageService(provider: StorageProvider): StorageService 
       };
     },
 
+    async putUserFile(input: PutUserFileInput): Promise<PutFileResult> {
+      assertPutUserFileInput(input);
+      const objectKey = buildUserObjectKey(input.userId, input.namespace, input.originalFilename);
+      const byteSize = input.body.length;
+      const contentType = input.contentType.trim().toLowerCase();
+      await provider.putObject({
+        objectKey,
+        body: input.body,
+        contentType,
+        contentLength: byteSize,
+      });
+
+      return {
+        provider: provider.id,
+        objectKey,
+        contentType,
+        byteSize,
+        sha256: hashBuffer(input.body),
+        originalFilename: input.originalFilename,
+      };
+    },
+
     async getObject(companyId: string, objectKey: string) {
       ensureCompanyPrefix(companyId, objectKey);
+      return provider.getObject({ objectKey });
+    },
+
+    async getUserObject(userId: string, objectKey: string) {
+      ensureUserPrefix(userId, objectKey);
       return provider.getObject({ objectKey });
     },
 
@@ -123,8 +196,18 @@ export function createStorageService(provider: StorageProvider): StorageService 
       return provider.headObject({ objectKey });
     },
 
+    async headUserObject(userId: string, objectKey: string) {
+      ensureUserPrefix(userId, objectKey);
+      return provider.headObject({ objectKey });
+    },
+
     async deleteObject(companyId: string, objectKey: string) {
       ensureCompanyPrefix(companyId, objectKey);
+      await provider.deleteObject({ objectKey });
+    },
+
+    async deleteUserObject(userId: string, objectKey: string) {
+      ensureUserPrefix(userId, objectKey);
       await provider.deleteObject({ objectKey });
     },
   };

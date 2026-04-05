@@ -42,6 +42,15 @@ export interface CompanyPortabilitySidebarOrder {
   projects: string[];
 }
 
+export interface CompanyPortabilityStatusManifestEntry {
+  slug: string;
+  label: string;
+  category: string;
+  color: string;
+  position: number;
+  isDefault: boolean;
+}
+
 export interface CompanyPortabilityProjectManifestEntry {
   slug: string;
   name: string;
@@ -157,6 +166,7 @@ export interface CompanyPortabilityManifest {
   includes: CompanyPortabilityInclude;
   company: CompanyPortabilityCompanyManifestEntry | null;
   sidebar: CompanyPortabilitySidebarOrder | null;
+  statuses: CompanyPortabilityStatusManifestEntry[];
   agents: CompanyPortabilityAgentManifestEntry[];
   skills: CompanyPortabilitySkillManifestEntry[];
   projects: CompanyPortabilityProjectManifestEntry[];

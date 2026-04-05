@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ISSUE_PRIORITIES, ISSUE_STATUSES } from "../constants.js";
+import { ISSUE_PRIORITIES } from "../constants.js";
 
 export const ISSUE_EXECUTION_WORKSPACE_PREFERENCES = [
   "inherit",
@@ -44,7 +44,7 @@ export const createIssueSchema = z.object({
   inheritExecutionWorkspaceFromIssueId: z.string().uuid().optional().nullable(),
   title: z.string().min(1),
   description: z.string().optional().nullable(),
-  status: z.enum(ISSUE_STATUSES).optional().default("backlog"),
+  status: z.string().trim().min(1).optional().default("backlog"),
   priority: z.enum(ISSUE_PRIORITIES).optional().default("medium"),
   assigneeAgentId: z.string().uuid().optional().nullable(),
   assigneeUserId: z.string().optional().nullable(),
@@ -66,6 +66,17 @@ export const createIssueLabelSchema = z.object({
 
 export type CreateIssueLabel = z.infer<typeof createIssueLabelSchema>;
 
+export const updateIssueLabelSchema = z
+  .object({
+    name: z.string().trim().min(1).max(48).optional(),
+    color: z.string().regex(/^#(?:[0-9a-fA-F]{6})$/, "Color must be a 6-digit hex value").optional(),
+  })
+  .refine((value) => value.name !== undefined || value.color !== undefined, {
+    message: "At least one label field must be provided",
+  });
+
+export type UpdateIssueLabel = z.infer<typeof updateIssueLabelSchema>;
+
 export const updateIssueSchema = createIssueSchema.partial().extend({
   comment: z.string().min(1).optional(),
   reopen: z.boolean().optional(),
@@ -78,7 +89,7 @@ export type IssueExecutionWorkspaceSettings = z.infer<typeof issueExecutionWorks
 
 export const checkoutIssueSchema = z.object({
   agentId: z.string().uuid(),
-  expectedStatuses: z.array(z.enum(ISSUE_STATUSES)).nonempty(),
+  expectedStatuses: z.array(z.string().trim().min(1)).nonempty().optional(),
 });
 
 export type CheckoutIssue = z.infer<typeof checkoutIssueSchema>;

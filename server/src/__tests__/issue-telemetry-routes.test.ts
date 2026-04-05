@@ -16,6 +16,57 @@ const mockAgentService = vi.hoisted(() => ({
 const mockTrackAgentTaskCompleted = vi.hoisted(() => vi.fn());
 const mockGetTelemetryClient = vi.hoisted(() => vi.fn());
 
+const mockCompanyStatusService = vi.hoisted(() => {
+  const resolveCategory = (slug: string) => {
+    switch (slug) {
+      case "done":
+        return "completed";
+      case "cancelled":
+        return "cancelled";
+      case "blocked":
+        return "blocked";
+      case "in_progress":
+      case "in_review":
+        return "started";
+      default:
+        return "unstarted";
+    }
+  };
+
+  const defaultSlugByCategory: Record<string, string> = {
+    unstarted: "todo",
+    started: "in_progress",
+    blocked: "blocked",
+    completed: "done",
+    cancelled: "cancelled",
+  };
+
+  const makeStatus = (companyId: string, slug: string) => ({
+    id: `status-${slug}`,
+    companyId,
+    slug,
+    label: slug,
+    category: resolveCategory(slug),
+    color: "#64748b",
+    position: 0,
+    isDefault: slug === "todo" || slug === "in_progress",
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  });
+
+  return {
+    ensureDefaults: vi.fn(async () => []),
+    getDefault: vi.fn(async (companyId: string, category: string) =>
+      makeStatus(companyId, defaultSlugByCategory[category] ?? "todo")),
+    listSlugsByCategory: vi.fn(async (_companyId: string, category: string) =>
+      category === "blocked" ? ["blocked"] : []),
+    requireBySlug: vi.fn(async (companyId: string, slug: string) => makeStatus(companyId, slug)),
+    getBySlug: vi.fn(async (companyId: string, slug: string) => makeStatus(companyId, slug)),
+    listOpenSlugs: vi.fn(async () => ["backlog", "todo", "in_progress", "blocked"]),
+    isTerminalCategory: vi.fn((category: string) => category === "completed" || category === "cancelled"),
+  };
+});
+
 vi.mock("@paperclipai/shared/telemetry", () => ({
   trackAgentTaskCompleted: mockTrackAgentTaskCompleted,
 }));
@@ -30,6 +81,7 @@ vi.mock("../services/index.js", () => ({
     hasPermission: vi.fn(),
   }),
   agentService: () => mockAgentService,
+  companyStatusService: () => mockCompanyStatusService,
   documentService: () => ({}),
   executionWorkspaceService: () => ({}),
   feedbackService: () => ({}),
@@ -53,6 +105,18 @@ function makeIssue(status: "todo" | "done") {
     id: "11111111-1111-4111-8111-111111111111",
     companyId: "company-1",
     status,
+    statusDetails: {
+      id: `status-${status}`,
+      companyId: "company-1",
+      slug: status,
+      label: status,
+      category: status === "done" ? "completed" : "unstarted",
+      color: "#64748b",
+      position: 0,
+      isDefault: status === "todo",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    },
     assigneeAgentId: "22222222-2222-4222-8222-222222222222",
     assigneeUserId: null,
     createdByUserId: "local-board",
@@ -79,7 +143,7 @@ describe("issue telemetry routes", () => {
     mockGetTelemetryClient.mockReturnValue({ track: vi.fn() });
     mockIssueService.getById.mockResolvedValue(makeIssue("todo"));
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
-      ...makeIssue("todo"),
+      ...makeIssue(patch.status === "done" ? "done" : "todo"),
       ...patch,
     }));
   });

@@ -21,17 +21,19 @@ import type {
   CompanyPortabilityPreviewResult,
   CompanyPortabilityProjectManifestEntry,
   CompanyPortabilityProjectWorkspaceManifestEntry,
+  CompanyPortabilityStatusManifestEntry,
   CompanyPortabilityIssueRoutineManifestEntry,
   CompanyPortabilityIssueRoutineTriggerManifestEntry,
   CompanyPortabilityIssueManifestEntry,
   CompanyPortabilitySidebarOrder,
   CompanyPortabilitySkillManifestEntry,
   CompanySkill,
+  IssueStatusCategory,
   RoutineVariable,
 } from "@paperclipai/shared";
 import {
+  ISSUE_STATUS_CATEGORIES,
   ISSUE_PRIORITIES,
-  ISSUE_STATUSES,
   PROJECT_STATUSES,
   ROUTINE_CATCH_UP_POLICIES,
   ROUTINE_CONCURRENCY_POLICIES,
@@ -55,6 +57,7 @@ import { assetService } from "./assets.js";
 import { generateReadme } from "./company-export-readme.js";
 import { renderOrgChartPng, type OrgNode } from "../routes/org-chart-svg.js";
 import { companySkillService } from "./company-skills.js";
+import { companyStatusService } from "./company-statuses.js";
 import { companyService } from "./companies.js";
 import { validateCron } from "./cron.js";
 import { issueService } from "./issues.js";
@@ -405,6 +408,7 @@ type CompanyPackageIncludeEntry = {
 type PaperclipExtensionDoc = {
   schema?: string;
   company?: Record<string, unknown> | null;
+  statuses?: Record<string, Record<string, unknown>> | null;
   agents?: Record<string, Record<string, unknown>> | null;
   projects?: Record<string, Record<string, unknown>> | null;
   tasks?: Record<string, Record<string, unknown>> | null;
@@ -2278,6 +2282,7 @@ function buildManifestFromPackageFiles(
     : {};
   const paperclipCompany = isPlainRecord(paperclipExtension.company) ? paperclipExtension.company : {};
   const paperclipSidebar = normalizePortableSidebarOrder(paperclipExtension.sidebar);
+  const paperclipStatuses = isPlainRecord(paperclipExtension.statuses) ? paperclipExtension.statuses : {};
   const paperclipAgents = isPlainRecord(paperclipExtension.agents) ? paperclipExtension.agents : {};
   const paperclipProjects = isPlainRecord(paperclipExtension.projects) ? paperclipExtension.projects : {};
   const paperclipTasks = isPlainRecord(paperclipExtension.tasks) ? paperclipExtension.tasks : {};
@@ -2322,7 +2327,7 @@ function buildManifestFromPackageFiles(
   const skillPaths = Array.from(new Set([...referencedSkillPaths, ...discoveredSkillPaths])).sort();
 
   const manifest: CompanyPortabilityManifest = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     generatedAt: new Date().toISOString(),
     source: opts?.sourceLabel ?? null,
     includes: {
@@ -2356,6 +2361,7 @@ function buildManifestFromPackageFiles(
         asString(paperclipCompany.feedbackDataSharingTermsVersion),
     },
     sidebar: paperclipSidebar,
+    statuses: [],
     agents: [],
     skills: [],
     projects: [],
@@ -2364,6 +2370,27 @@ function buildManifestFromPackageFiles(
   };
 
   const warnings: string[] = [];
+  for (const [slug, rawStatus] of Object.entries(paperclipStatuses)) {
+    if (!isPlainRecord(rawStatus)) continue;
+    const normalizedSlug = normalizeAgentUrlKey(slug) ?? slug.trim().toLowerCase();
+    const label = asString(rawStatus.label) ?? normalizedSlug;
+    const category = asString(rawStatus.category);
+    const color = asString(rawStatus.color);
+    const position = asInteger(rawStatus.position) ?? manifest.statuses.length;
+    if (!normalizedSlug || !category || !color) {
+      warnings.push(`Skipped invalid company status "${slug}" in ${paperclipExtensionPath ?? ".paperclip.yaml"}.`);
+      continue;
+    }
+    manifest.statuses.push({
+      slug: normalizedSlug,
+      label,
+      category,
+      color,
+      position: Math.max(0, position),
+      isDefault: asBoolean(rawStatus.isDefault) ?? false,
+    });
+  }
+  manifest.statuses.sort((left, right) => left.position - right.position || left.label.localeCompare(right.label));
   if (manifest.company?.logoPath && !normalizedFiles[manifest.company.logoPath]) {
     warnings.push(`Referenced company logo file is missing from package: ${manifest.company.logoPath}`);
   }
@@ -2669,7 +2696,57 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
   const access = accessService(db);
   const projects = projectService(db);
   const issues = issueService(db);
+  const statuses = companyStatusService(db);
   const companySkills = companySkillService(db);
+
+  async function syncImportedCompanyStatuses(
+    companyId: string,
+    manifestStatuses: CompanyPortabilityStatusManifestEntry[],
+    warnings: string[],
+  ) {
+    if (manifestStatuses.length === 0) {
+      return statuses.ensureDefaults(companyId);
+    }
+
+    const validCategories = new Set<string>(ISSUE_STATUS_CATEGORIES);
+    const existing = await statuses.list(companyId);
+    const existingBySlug = new Map(existing.map((status) => [status.slug, status] as const));
+
+    for (const manifestStatus of manifestStatuses) {
+      if (!validCategories.has(manifestStatus.category)) {
+        warnings.push(`Skipped imported company status ${manifestStatus.slug} because category "${manifestStatus.category}" is invalid.`);
+        continue;
+      }
+
+      const input = {
+        slug: manifestStatus.slug,
+        label: manifestStatus.label,
+        category: manifestStatus.category as IssueStatusCategory,
+        color: manifestStatus.color,
+        isDefault: manifestStatus.isDefault,
+      };
+      const existingStatus = existingBySlug.get(manifestStatus.slug);
+      if (existingStatus) {
+        await statuses.update(companyId, existingStatus.id, input);
+      } else {
+        await statuses.create(companyId, input);
+      }
+    }
+
+    const updated = await statuses.list(companyId);
+    const updatedBySlug = new Map(updated.map((status) => [status.slug, status] as const));
+    const importedIds = manifestStatuses
+      .map((status) => updatedBySlug.get(status.slug)?.id ?? null)
+      .filter((statusId): statusId is string => Boolean(statusId));
+    if (importedIds.length > 0 && importedIds.length <= updated.length) {
+      const remainingIds = updated
+        .filter((status) => !manifestStatuses.some((manifestStatus) => manifestStatus.slug === status.slug))
+        .map((status) => status.id);
+      await statuses.reorder(companyId, [...importedIds, ...remainingIds]);
+    }
+
+    return statuses.list(companyId);
+  }
 
   async function resolveSource(source: CompanyPortabilityPreview["source"]): Promise<ResolvedSource> {
     if (source.type === "inline") {
@@ -2788,6 +2865,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     const requestedSidebarOrder = normalizePortableSidebarOrder(input.sidebarOrder);
     const rootPath = normalizeAgentUrlKey(company.name) ?? "company-package";
     let companyLogoPath: string | null = null;
+    const companyStatusRows = include.company ? await statuses.list(companyId) : [];
 
     const allAgentRows = include.agents ? await agents.list(companyId, { includeTerminated: true }) : [];
     const liveAgentRows = allAgentRows.filter((agent) => agent.status !== "terminated");
@@ -3009,6 +3087,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
 
     const paperclipAgentsOut: Record<string, Record<string, unknown>> = {};
     const paperclipProjectsOut: Record<string, Record<string, unknown>> = {};
+    const paperclipStatusesOut: Record<string, Record<string, unknown>> = {};
     const paperclipTasksOut: Record<string, Record<string, unknown>> = {};
     const unportableTaskWorkspaceRefs = new Map<string, { workspaceId: string; taskSlugs: string[] }>();
     const paperclipRoutinesOut: Record<string, Record<string, unknown>> = {};
@@ -3141,6 +3220,18 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
       }
     }
 
+    if (include.company) {
+      for (const status of companyStatusRows) {
+        paperclipStatusesOut[status.slug] = {
+          label: status.label,
+          category: status.category,
+          color: status.color,
+          position: status.position,
+          isDefault: status.isDefault,
+        };
+      }
+    }
+
     for (const project of selectedProjectRows) {
       const slug = projectSlugById.get(project.id)!;
       const projectPath = `projects/${slug}/PROJECT.md`;
@@ -3260,6 +3351,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     const paperclipProjects = Object.fromEntries(
       Object.entries(paperclipProjectsOut).filter(([, value]) => isPlainRecord(value) && Object.keys(value).length > 0),
     );
+    const paperclipStatuses = Object.fromEntries(
+      Object.entries(paperclipStatusesOut).filter(([, value]) => isPlainRecord(value) && Object.keys(value).length > 0),
+    );
     const paperclipTasks = Object.fromEntries(
       Object.entries(paperclipTasksOut).filter(([, value]) => isPlainRecord(value) && Object.keys(value).length > 0),
     );
@@ -3279,6 +3373,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           feedbackDataSharingTermsVersion: company.feedbackDataSharingTermsVersion ?? null,
         }),
         sidebar: stripEmptyValues(sidebarOrder),
+        statuses: Object.keys(paperclipStatuses).length > 0 ? paperclipStatuses : undefined,
         agents: Object.keys(paperclipAgents).length > 0 ? paperclipAgents : undefined,
         projects: Object.keys(paperclipProjects).length > 0 ? paperclipProjects : undefined,
         tasks: Object.keys(paperclipTasks).length > 0 ? paperclipTasks : undefined,
@@ -3802,7 +3897,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
       if (mode === "agent_safe" && options?.sourceCompanyId) {
         await access.copyActiveUserMemberships(options.sourceCompanyId, created.id);
       } else {
-        await access.ensureMembership(created.id, "user", actorUserId ?? "board", "owner", "active");
+        await access.ensureMembership(created.id, "user", actorUserId ?? "board", "admin", "active");
       }
       targetCompany = created;
       companyAction = "created";
@@ -3828,6 +3923,20 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
     }
 
     if (!targetCompany) throw notFound("Target company not found");
+
+    const importedCompanyStatuses = await syncImportedCompanyStatuses(
+      targetCompany.id,
+      sourceManifest.statuses ?? [],
+      warnings,
+    );
+    const importedStatusBySlug = new Map(
+      importedCompanyStatuses.map((status) => [status.slug, status] as const),
+    );
+    const defaultImportedUnstartedStatus =
+      importedCompanyStatuses.find((status) => status.category === "unstarted" && status.isDefault)
+      ?? importedCompanyStatuses.find((status) => status.category === "unstarted")
+      ?? importedCompanyStatuses[0]
+      ?? null;
 
     if (include.company) {
       const logoPath = sourceManifest.company?.logoPath ?? null;
@@ -4283,9 +4392,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           title: manifestIssue.title,
           description,
           assigneeAgentId,
-          status: manifestIssue.status && ISSUE_STATUSES.includes(manifestIssue.status as any)
-            ? manifestIssue.status as typeof ISSUE_STATUSES[number]
-            : "backlog",
+          status: manifestIssue.status && importedStatusBySlug.has(manifestIssue.status)
+            ? manifestIssue.status
+            : defaultImportedUnstartedStatus?.slug ?? "backlog",
           priority: manifestIssue.priority && ISSUE_PRIORITIES.includes(manifestIssue.priority as any)
             ? manifestIssue.priority as typeof ISSUE_PRIORITIES[number]
             : "medium",

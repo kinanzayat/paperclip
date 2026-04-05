@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { buildAgentMentionHref, buildProjectMentionHref, buildSkillMentionHref } from "@paperclipai/shared";
+import { buildAgentMentionHref, buildProjectMentionHref, buildSkillMentionHref, buildUserMentionHref } from "@paperclipai/shared";
 import { ThemeProvider } from "../context/ThemeContext";
 import { MarkdownBody } from "./MarkdownBody";
 
@@ -47,5 +47,19 @@ describe("MarkdownBody", () => {
     expect(html).toContain("--paperclip-mention-project-color:#336699");
     expect(html).toContain('href="/skills/skill-789"');
     expect(html).toContain('data-mention-kind="skill"');
+  });
+
+  it("renders user mentions as chips without a profile link", () => {
+    const html = renderToStaticMarkup(
+      <ThemeProvider>
+        <MarkdownBody>
+          {`[@Abood](${buildUserMentionHref("user-123")})`}
+        </MarkdownBody>
+      </ThemeProvider>,
+    );
+
+    expect(html).toContain('data-mention-kind="user"');
+    expect(html).toContain("Abood");
+    expect(html).not.toContain('href="/users/');
   });
 });

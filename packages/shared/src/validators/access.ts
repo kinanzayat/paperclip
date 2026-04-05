@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  COMPANY_MEMBERSHIP_ROLES,
   INVITE_JOIN_TYPES,
   JOIN_REQUEST_STATUSES,
   JOIN_REQUEST_TYPES,
@@ -84,6 +85,16 @@ export const updateMemberPermissionsSchema = z.object({
 });
 
 export type UpdateMemberPermissions = z.infer<typeof updateMemberPermissionsSchema>;
+
+export const companyMembershipRoleSchema = z.enum(COMPANY_MEMBERSHIP_ROLES);
+
+export type CompanyMembershipRoleInput = z.infer<typeof companyMembershipRoleSchema>;
+
+export const updateMemberRoleSchema = z.object({
+  membershipRole: companyMembershipRoleSchema,
+});
+
+export type UpdateMemberRole = z.infer<typeof updateMemberRoleSchema>;
 
 export const updateUserCompanyAccessSchema = z.object({
   companyIds: z.array(z.string().uuid()).default([]),

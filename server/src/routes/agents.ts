@@ -36,6 +36,7 @@ import {
   approvalService,
   companySkillService,
   budgetService,
+  companyStatusService,
   heartbeatService,
   issueApprovalService,
   issueService,
@@ -94,6 +95,7 @@ export function agentRoutes(db: Db) {
 
   const router = Router();
   const svc = agentService(db);
+  const statusesSvc = companyStatusService(db);
   const access = accessService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
@@ -1081,9 +1083,18 @@ export function agentRoutes(db: Db) {
     }
 
     const issuesSvc = issueService(db);
+    const [defaultUnstartedStatus, activeExecutionStatus, blockedStatuses] = await Promise.all([
+      statusesSvc.getDefault(req.actor.companyId, "unstarted"),
+      statusesSvc.getDefault(req.actor.companyId, "started"),
+      statusesSvc.listSlugsByCategory(req.actor.companyId, "blocked"),
+    ]);
     const rows = await issuesSvc.list(req.actor.companyId, {
       assigneeAgentId: req.actor.agentId,
-      status: "todo,in_progress,blocked",
+      status: [
+        defaultUnstartedStatus.slug,
+        activeExecutionStatus.slug,
+        ...blockedStatuses,
+      ].join(","),
     });
 
     res.json(
@@ -2426,7 +2437,8 @@ export function agentRoutes(db: Db) {
       run = null;
     }
 
-    if (!run && issue.assigneeAgentId && issue.status === "in_progress") {
+    const activeExecutionStatus = await statusesSvc.getDefault(issue.companyId, "started");
+    if (!run && issue.assigneeAgentId && issue.status === activeExecutionStatus.slug) {
       const candidateRun = await heartbeat.getActiveRunForAgent(issue.assigneeAgentId);
       const candidateContext = asRecord(candidateRun?.contextSnapshot);
       const candidateIssueId = asNonEmptyString(candidateContext?.issueId);

@@ -1,5 +1,6 @@
 import type {
   AgentAdapterType,
+  CompanyMembershipRole,
   InstanceUserRole,
   InviteJoinType,
   InviteType,
@@ -10,13 +11,21 @@ import type {
   PrincipalType,
 } from "../constants.js";
 
+export interface AccessUserSummary {
+  id: string;
+  name: string | null;
+  email: string | null;
+  image: string | null;
+}
+
 export interface CompanyMembership {
   id: string;
   companyId: string;
   principalType: PrincipalType;
   principalId: string;
   status: MembershipStatus;
-  membershipRole: string | null;
+  membershipRole: CompanyMembershipRole | null;
+  user?: AccessUserSummary | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -68,6 +77,9 @@ export interface JoinRequest {
   approvedAt: Date | null;
   rejectedByUserId: string | null;
   rejectedAt: Date | null;
+  requestingUser?: AccessUserSummary | null;
+  approvedByUser?: AccessUserSummary | null;
+  rejectedByUser?: AccessUserSummary | null;
   createdAt: Date;
   updatedAt: Date;
 }

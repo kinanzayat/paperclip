@@ -3,6 +3,10 @@ import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { companyRoutes } from "../routes/companies.js";
 
+const mockCompanyStatusService = vi.hoisted(() => ({
+  ensureDefaults: vi.fn(async () => []),
+}));
+
 vi.mock("../services/index.js", () => ({
   companyService: () => ({
     list: vi.fn(),
@@ -26,6 +30,7 @@ vi.mock("../services/index.js", () => ({
   budgetService: () => ({
     upsertPolicy: vi.fn(),
   }),
+  companyStatusService: () => mockCompanyStatusService,
   agentService: () => ({
     getById: vi.fn(),
   }),

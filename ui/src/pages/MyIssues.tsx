@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { issuesApi } from "../api/issues";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { queryKeys } from "../lib/queryKeys";
 import { StatusIcon } from "../components/StatusIcon";
 
@@ -15,6 +16,7 @@ import { ListTodo } from "lucide-react";
 export function MyIssues() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { statusBySlug } = useCompanyStatuses(selectedCompanyId);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "My Issues" }]);
@@ -36,7 +38,10 @@ export function MyIssues() {
 
   // Show issues that are not assigned (user-created or unassigned)
   const myIssues = (issues ?? []).filter(
-    (i) => !i.assigneeAgentId && !["done", "cancelled"].includes(i.status)
+    (issue) => {
+      const statusCategory = issue.statusDetails?.category ?? statusBySlug.get(issue.status)?.category ?? null;
+      return !issue.assigneeAgentId && statusCategory !== "completed" && statusCategory !== "cancelled";
+    },
   );
 
   return (

@@ -172,6 +172,7 @@ describe("renderCompanyImportPreview", () => {
           agents: ["ceo"],
           projects: ["alpha"],
         },
+        statuses: [],
         agents: [
           {
             slug: "ceo",
@@ -384,6 +385,7 @@ describe("import selection catalog", () => {
           agents: ["ceo"],
           projects: ["alpha"],
         },
+        statuses: [],
         agents: [
           {
             slug: "ceo",
@@ -539,6 +541,7 @@ describe("default adapter overrides", () => {
         },
         company: null,
         sidebar: null,
+        statuses: [],
         agents: [
           {
             slug: "legacy-agent",

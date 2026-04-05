@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
 import type { Request } from "express";
-import { and, eq, isNull, desc } from "drizzle-orm";
+import { and, eq, isNull, desc, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agentApiKeys,
@@ -26,6 +26,7 @@ import {
   createOpenClawInvitePromptSchema,
   listJoinRequestsQuerySchema,
   resolveCliAuthChallengeSchema,
+  updateMemberRoleSchema,
   updateMemberPermissionsSchema,
   updateUserCompanyAccessSchema,
   PERMISSION_KEYS
@@ -215,6 +216,41 @@ function listAvailableSkills(): AvailableSkill[] {
 function toJoinRequestResponse(row: typeof joinRequests.$inferSelect) {
   const { claimSecretHash: _claimSecretHash, ...safe } = row;
   return safe;
+}
+
+type AccessUserSummary = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  image: string | null;
+};
+
+async function loadAccessUsers(db: Db, userIds: Array<string | null | undefined>) {
+  const ids = [...new Set(userIds.filter((value): value is string => typeof value === "string" && value.length > 0))];
+  if (ids.length === 0) return new Map<string, AccessUserSummary>();
+  const rows = await db
+    .select({
+      id: authUsers.id,
+      name: authUsers.name,
+      email: authUsers.email,
+      image: authUsers.image,
+    })
+    .from(authUsers)
+    .where(inArray(authUsers.id, ids));
+  return new Map(rows.map((row) => [row.id, row] as const));
+}
+
+function enrichJoinRequestResponse(
+  row: typeof joinRequests.$inferSelect,
+  users: Map<string, AccessUserSummary>,
+) {
+  const safe = toJoinRequestResponse(row);
+  return {
+    ...safe,
+    requestingUser: safe.requestingUserId ? (users.get(safe.requestingUserId) ?? null) : null,
+    approvedByUser: safe.approvedByUserId ? (users.get(safe.approvedByUserId) ?? null) : null,
+    rejectedByUser: safe.rejectedByUserId ? (users.get(safe.rejectedByUserId) ?? null) : null,
+  };
 }
 
 type JoinDiagnostic = {
@@ -2591,7 +2627,12 @@ export function accessRoutes(
         return false;
       return true;
     });
-    res.json(filtered.map(toJoinRequestResponse));
+    const users = await loadAccessUsers(db, filtered.flatMap((row) => [
+      row.requestingUserId,
+      row.approvedByUserId,
+      row.rejectedByUserId,
+    ]));
+    res.json(filtered.map((row) => enrichJoinRequestResponse(row, users)));
   });
 
   router.post(
@@ -2736,7 +2777,12 @@ export function accessRoutes(
         }).catch(() => {});
       }
 
-      res.json(toJoinRequestResponse(approved));
+      const users = await loadAccessUsers(db, [
+        approved.requestingUserId,
+        approved.approvedByUserId,
+        approved.rejectedByUserId,
+      ]);
+      res.json(enrichJoinRequestResponse(approved, users));
     }
   );
 
@@ -2784,7 +2830,12 @@ export function accessRoutes(
         details: { requestType: existing.requestType }
       });
 
-      res.json(toJoinRequestResponse(rejected));
+      const users = await loadAccessUsers(db, [
+        rejected.requestingUserId,
+        rejected.approvedByUserId,
+        rejected.rejectedByUserId,
+      ]);
+      res.json(enrichJoinRequestResponse(rejected, users));
     }
   );
 
@@ -2871,10 +2922,27 @@ export function accessRoutes(
 
   router.get("/companies/:companyId/members", async (req, res) => {
     const companyId = req.params.companyId as string;
-    await assertCompanyPermission(req, companyId, "users:manage_permissions");
+    assertCompanyAccess(req, companyId);
     const members = await access.listMembers(companyId);
     res.json(members);
   });
+
+  router.patch(
+    "/companies/:companyId/members/:memberId/role",
+    validate(updateMemberRoleSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const memberId = req.params.memberId as string;
+      await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      const updated = await access.updateMemberRole(
+        companyId,
+        memberId,
+        req.body.membershipRole,
+      );
+      if (!updated) throw notFound("Member not found");
+      res.json(updated);
+    }
+  );
 
   router.patch(
     "/companies/:companyId/members/:memberId/permissions",

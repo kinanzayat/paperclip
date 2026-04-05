@@ -3,12 +3,15 @@ import {
   buildAgentMentionHref,
   buildProjectMentionHref,
   buildSkillMentionHref,
+  buildUserMentionHref,
   extractAgentMentionIds,
   extractProjectMentionIds,
   extractSkillMentionIds,
+  extractUserMentionIds,
   parseAgentMentionHref,
   parseProjectMentionHref,
   parseSkillMentionHref,
+  parseUserMentionHref,
 } from "./project-mentions.js";
 
 describe("project-mentions", () => {
@@ -37,5 +40,13 @@ describe("project-mentions", () => {
       slug: "release-changelog",
     });
     expect(extractSkillMentionIds(`[/release-changelog](${href})`)).toEqual(["skill-123"]);
+  });
+
+  it("round-trips user mentions", () => {
+    const href = buildUserMentionHref("user-123");
+    expect(parseUserMentionHref(href)).toEqual({
+      userId: "user-123",
+    });
+    expect(extractUserMentionIds(`[@Abood](${href})`)).toEqual(["user-123"]);
   });
 });

@@ -3,9 +3,11 @@ import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies, costEvents, issues } from "@paperclipai/db";
 import { notFound } from "../errors.js";
 import { budgetService } from "./budgets.js";
+import { companyStatusService } from "./company-statuses.js";
 
 export function dashboardService(db: Db) {
   const budgets = budgetService(db);
+  const statuses = companyStatusService(db);
   return {
     summary: async (companyId: string) => {
       const company = await db
@@ -27,6 +29,7 @@ export function dashboardService(db: Db) {
         .from(issues)
         .where(eq(issues.companyId, companyId))
         .groupBy(issues.status);
+      const statusMap = new Map((await statuses.list(companyId)).map((status) => [status.slug, status] as const));
 
       const pendingApprovals = await db
         .select({ count: sql<number>`count(*)` })
@@ -55,10 +58,12 @@ export function dashboardService(db: Db) {
       };
       for (const row of taskRows) {
         const count = Number(row.count);
-        if (row.status === "in_progress") taskCounts.inProgress += count;
-        if (row.status === "blocked") taskCounts.blocked += count;
-        if (row.status === "done") taskCounts.done += count;
-        if (row.status !== "done" && row.status !== "cancelled") taskCounts.open += count;
+        const status = statusMap.get(row.status);
+        if (!status) continue;
+        if (status.category === "started") taskCounts.inProgress += count;
+        if (status.category === "blocked") taskCounts.blocked += count;
+        if (status.category === "completed") taskCounts.done += count;
+        if (!statuses.isTerminalCategory(status.category)) taskCounts.open += count;
       }
 
       const now = new Date();

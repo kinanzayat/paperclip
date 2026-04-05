@@ -28,8 +28,8 @@ import {
   thematicBreakPlugin,
   type RealmPlugin,
 } from "@mdxeditor/editor";
-import { buildAgentMentionHref, buildProjectMentionHref } from "@paperclipai/shared";
-import { Boxes } from "lucide-react";
+import { buildAgentMentionHref, buildProjectMentionHref, buildUserMentionHref } from "@paperclipai/shared";
+import { Boxes, UserRound } from "lucide-react";
 import { AgentIcon } from "./AgentIconPicker";
 import { applyMentionChipDecoration, clearMentionChipDecoration, parseMentionChipHref } from "../lib/mention-chips";
 import { MentionAwareLinkNode, mentionAwareLinkNodeReplacement } from "../lib/mention-aware-link-node";
@@ -45,11 +45,14 @@ import { useEditorAutocomplete, type SkillCommandOption } from "../context/Edito
 export interface MentionOption {
   id: string;
   name: string;
-  kind?: "agent" | "project";
+  searchText?: string;
+  kind?: "agent" | "project" | "user";
   agentId?: string;
   agentIcon?: string | null;
   projectId?: string;
   projectColor?: string | null;
+  userId?: string;
+  userImage?: string | null;
 }
 
 /* ---- Editor props ---- */
@@ -250,6 +253,10 @@ function mentionMarkdown(option: MentionOption): string {
   if (option.kind === "project" && option.projectId) {
     return `[@${option.name}](${buildProjectMentionHref(option.projectId, option.projectColor ?? null)}) `;
   }
+  if (option.kind === "user") {
+    const userId = option.userId ?? option.id.replace(/^user:/, "");
+    return `[@${option.name}](${buildUserMentionHref(userId)}) `;
+  }
   const agentId = option.agentId ?? option.id.replace(/^agent:/, "");
   return `[@${option.name}](${buildAgentMentionHref(agentId, option.agentIcon ?? null)}) `;
 }
@@ -321,6 +328,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         const agentId = mention.agentId ?? mention.id.replace(/^agent:/, "");
         map.set(`agent:${agentId}`, mention);
       }
+      if (mention.kind === "user") {
+        const userId = mention.userId ?? mention.id.replace(/^user:/, "");
+        map.set(`user:${userId}`, mention);
+      }
       if (mention.kind === "project" && mention.projectId) {
         map.set(`project:${mention.projectId}`, mention);
       }
@@ -340,7 +351,13 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         .slice(0, 8);
     }
     if (!mentions) return [];
-    return mentions.filter((m) => m.name.toLowerCase().includes(q)).slice(0, 8);
+    return mentions
+      .filter((m) => {
+        if (!q) return true;
+        const haystack = `${m.name} ${m.searchText ?? ""}`.toLowerCase();
+        return haystack.includes(q);
+      })
+      .slice(0, 8);
   }, [mentionState, mentions, slashCommands]);
 
   const setEditorRef = useCallback((instance: MDXEditorMethods | null) => {
@@ -454,6 +471,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       }
 
       if (parsed.kind === "skill") {
+        applyMentionChipDecoration(link, parsed);
+        continue;
+      }
+
+      if (parsed.kind === "user") {
         applyMentionChipDecoration(link, parsed);
         continue;
       }
@@ -575,6 +597,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
 
           const mentionHref = option.kind === "skill"
             ? option.href
+            : option.kind === "user"
+              ? buildUserMentionHref(option.userId ?? option.id.replace(/^user:/, ""))
             : option.kind === "project" && option.projectId
               ? buildProjectMentionHref(option.projectId, option.projectColor ?? null)
               : buildAgentMentionHref(
@@ -790,6 +814,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
               >
                 {option.kind === "skill" ? (
                   <Boxes className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : option.kind === "user" ? (
+                  <UserRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 ) : option.kind === "project" && option.projectId ? (
                   <span
                     className="inline-flex h-2 w-2 rounded-full border border-border/50"
@@ -805,6 +831,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                 {option.kind === "project" && option.projectId && (
                   <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
                     Project
+                  </span>
+                )}
+                {option.kind === "user" && (
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    User
                   </span>
                 )}
                 {option.kind === "skill" && (

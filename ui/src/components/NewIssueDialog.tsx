@@ -12,6 +12,7 @@ import { authApi } from "../api/auth";
 import { assetsApi } from "../api/assets";
 import { queryKeys } from "../lib/queryKeys";
 import { useProjectOrder } from "../hooks/useProjectOrder";
+import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "../lib/recent-assignees";
 import { useToast } from "../context/ToastContext";
 import {
@@ -219,14 +220,6 @@ function formatFileSize(file: File) {
   return `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const statuses = [
-  { value: "backlog", label: "Backlog", color: issueStatusText.backlog ?? issueStatusTextDefault },
-  { value: "todo", label: "Todo", color: issueStatusText.todo ?? issueStatusTextDefault },
-  { value: "in_progress", label: "In Progress", color: issueStatusText.in_progress ?? issueStatusTextDefault },
-  { value: "in_review", label: "In Review", color: issueStatusText.in_review ?? issueStatusTextDefault },
-  { value: "done", label: "Done", color: issueStatusText.done ?? issueStatusTextDefault },
-];
-
 const priorities = [
   { value: "critical", label: "Critical", icon: AlertTriangle, color: priorityColor.critical ?? priorityColorDefault },
   { value: "high", label: "High", icon: ArrowUp, color: priorityColor.high ?? priorityColorDefault },
@@ -277,7 +270,7 @@ export function NewIssueDialog() {
   const { pushToast } = useToast();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [status, setStatus] = useState("todo");
+  const [status, setStatus] = useState("backlog");
   const [priority, setPriority] = useState("");
   const [assigneeValue, setAssigneeValue] = useState("");
   const [projectId, setProjectId] = useState("");
@@ -297,6 +290,11 @@ export function NewIssueDialog() {
 
   const effectiveCompanyId = dialogCompanyId ?? selectedCompanyId;
   const dialogCompany = companies.find((c) => c.id === effectiveCompanyId) ?? selectedCompany;
+  const {
+    statuses: companyStatuses,
+    defaultUnstartedStatus,
+  } = useCompanyStatuses(effectiveCompanyId);
+  const defaultStatusSlug = defaultUnstartedStatus?.slug ?? companyStatuses[0]?.slug ?? "backlog";
 
   // Popover states
   const [statusOpen, setStatusOpen] = useState(false);
@@ -513,7 +511,7 @@ export function NewIssueDialog() {
     if (newIssueDefaults.title) {
       setTitle(newIssueDefaults.title);
       setDescription(newIssueDefaults.description ?? "");
-      setStatus(newIssueDefaults.status ?? "todo");
+      setStatus(newIssueDefaults.status ?? defaultStatusSlug);
       setPriority(newIssueDefaults.priority ?? "");
       const defaultProjectId = newIssueDefaults.projectId ?? "";
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
@@ -531,7 +529,7 @@ export function NewIssueDialog() {
       const restoredProject = orderedProjects.find((project) => project.id === restoredProjectId);
       setTitle(draft.title);
       setDescription(draft.description);
-      setStatus(draft.status || "todo");
+      setStatus(draft.status || defaultStatusSlug);
       setPriority(draft.priority);
       setAssigneeValue(
         newIssueDefaults.assigneeAgentId || newIssueDefaults.assigneeUserId
@@ -552,7 +550,7 @@ export function NewIssueDialog() {
     } else {
       const defaultProjectId = newIssueDefaults.projectId ?? "";
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
-      setStatus(newIssueDefaults.status ?? "todo");
+      setStatus(newIssueDefaults.status ?? defaultStatusSlug);
       setPriority(newIssueDefaults.priority ?? "");
       setProjectId(defaultProjectId);
       setProjectWorkspaceId(defaultProjectWorkspaceIdForProject(defaultProject));
@@ -564,7 +562,14 @@ export function NewIssueDialog() {
       setSelectedExecutionWorkspaceId("");
       executionWorkspaceDefaultProjectId.current = defaultProjectId || null;
     }
-  }, [newIssueOpen, newIssueDefaults, orderedProjects]);
+  }, [newIssueOpen, newIssueDefaults, orderedProjects, defaultStatusSlug]);
+
+  useEffect(() => {
+    if (!newIssueOpen) return;
+    if (!companyStatuses.some((companyStatus) => companyStatus.slug === status)) {
+      setStatus(defaultStatusSlug);
+    }
+  }, [companyStatuses, defaultStatusSlug, newIssueOpen, status]);
 
   useEffect(() => {
     if (!supportsAssigneeOverrides) {
@@ -596,7 +601,7 @@ export function NewIssueDialog() {
   function reset() {
     setTitle("");
     setDescription("");
-    setStatus("todo");
+    setStatus(defaultStatusSlug);
     setPriority("");
     setAssigneeValue("");
     setProjectId("");
@@ -748,7 +753,22 @@ export function NewIssueDialog() {
   }
 
   const hasDraft = title.trim().length > 0 || description.trim().length > 0 || stagedFiles.length > 0;
-  const currentStatus = statuses.find((s) => s.value === status) ?? statuses[1]!;
+  const statusOptions = useMemo(
+    () =>
+      companyStatuses.map((companyStatus) => ({
+        value: companyStatus.slug,
+        label: companyStatus.label,
+        color: issueStatusText[companyStatus.slug] ?? issueStatusTextDefault,
+        customColor: companyStatus.color,
+      })),
+    [companyStatuses],
+  );
+  const currentStatus = statusOptions.find((entry) => entry.value === status) ?? statusOptions[0] ?? {
+    value: defaultStatusSlug,
+    label: "Status",
+    color: issueStatusTextDefault,
+    customColor: null,
+  };
   const currentPriority = priorities.find((p) => p.value === priority);
   const currentAssignee = selectedAssigneeAgentId
     ? (agents ?? []).find((a) => a.id === selectedAssigneeAgentId)
@@ -1326,12 +1346,15 @@ export function NewIssueDialog() {
           <Popover open={statusOpen} onOpenChange={setStatusOpen}>
             <PopoverTrigger asChild>
               <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors">
-                <CircleDot className={cn("h-3 w-3", currentStatus.color)} />
+                <CircleDot
+                  className={cn("h-3 w-3", currentStatus.color)}
+                  style={currentStatus.customColor ? { color: currentStatus.customColor } : undefined}
+                />
                 {currentStatus.label}
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-36 p-1" align="start">
-              {statuses.map((s) => (
+              {statusOptions.map((s) => (
                 <button
                   key={s.value}
                   className={cn(
@@ -1340,7 +1363,10 @@ export function NewIssueDialog() {
                   )}
                   onClick={() => { setStatus(s.value); setStatusOpen(false); }}
                 >
-                  <CircleDot className={cn("h-3 w-3", s.color)} />
+                  <CircleDot
+                    className={cn("h-3 w-3", s.color)}
+                    style={s.customColor ? { color: s.customColor } : undefined}
+                  />
                   {s.label}
                 </button>
               ))}

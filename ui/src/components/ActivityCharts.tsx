@@ -1,4 +1,5 @@
-import type { HeartbeatRun } from "@paperclipai/shared";
+import type { CompanyIssueStatus, HeartbeatRun } from "@paperclipai/shared";
+import { issueStatusColor, issueStatusLabel } from "../lib/status-colors";
 
 /* ---- Utilities ---- */
 
@@ -157,29 +158,16 @@ export function PriorityChart({ issues }: { issues: { priority: string; createdA
   );
 }
 
-const statusColors: Record<string, string> = {
-  todo: "#3b82f6",
-  in_progress: "#8b5cf6",
-  in_review: "#a855f7",
-  done: "#10b981",
-  blocked: "#ef4444",
-  cancelled: "#6b7280",
-  backlog: "#64748b",
+type IssueStatusChartItem = {
+  status: string;
+  createdAt: Date;
+  statusDetails?: CompanyIssueStatus | null;
 };
 
-const statusLabels: Record<string, string> = {
-  todo: "To Do",
-  in_progress: "In Progress",
-  in_review: "In Review",
-  done: "Done",
-  blocked: "Blocked",
-  cancelled: "Cancelled",
-  backlog: "Backlog",
-};
-
-export function IssueStatusChart({ issues }: { issues: { status: string; createdAt: Date }[] }) {
+export function IssueStatusChart({ issues }: { issues: IssueStatusChartItem[] }) {
   const days = getLast14Days();
   const allStatuses = new Set<string>();
+  const statusMeta = new Map<string, { color: string; label: string; position: number }>();
   const grouped = new Map<string, Record<string, number>>();
   for (const day of days) grouped.set(day, {});
   for (const issue of issues) {
@@ -188,9 +176,22 @@ export function IssueStatusChart({ issues }: { issues: { status: string; created
     if (!entry) continue;
     entry[issue.status] = (entry[issue.status] ?? 0) + 1;
     allStatuses.add(issue.status);
+    if (!statusMeta.has(issue.status)) {
+      statusMeta.set(issue.status, {
+        color: issueStatusColor(issue.status, { statusDetails: issue.statusDetails }) ?? "#6b7280",
+        label: issueStatusLabel(issue.status, { statusDetails: issue.statusDetails }),
+        position: issue.statusDetails?.position ?? Number.MAX_SAFE_INTEGER,
+      });
+    }
   }
 
-  const statusOrder = ["todo", "in_progress", "in_review", "done", "blocked", "cancelled", "backlog"].filter(s => allStatuses.has(s));
+  const statusOrder = Array.from(allStatuses).sort((left, right) => {
+    const leftMeta = statusMeta.get(left);
+    const rightMeta = statusMeta.get(right);
+    const byPosition = (leftMeta?.position ?? Number.MAX_SAFE_INTEGER) - (rightMeta?.position ?? Number.MAX_SAFE_INTEGER);
+    if (byPosition !== 0) return byPosition;
+    return (leftMeta?.label ?? left).localeCompare(rightMeta?.label ?? right);
+  });
   const maxValue = Math.max(...Array.from(grouped.values()).map(v => Object.values(v).reduce((a, b) => a + b, 0)), 1);
   const hasData = allStatuses.size > 0;
 
@@ -208,7 +209,13 @@ export function IssueStatusChart({ issues }: { issues: { status: string; created
               {total > 0 ? (
                 <div className="flex flex-col-reverse gap-px overflow-hidden" style={{ height: `${heightPct}%`, minHeight: 2 }}>
                   {statusOrder.map(s => (entry[s] ?? 0) > 0 ? (
-                    <div key={s} style={{ flex: entry[s], backgroundColor: statusColors[s] ?? "#6b7280" }} />
+                    <div
+                      key={s}
+                      style={{
+                        flex: entry[s],
+                        backgroundColor: statusMeta.get(s)?.color ?? "#6b7280",
+                      }}
+                    />
                   ) : null)}
                 </div>
               ) : (
@@ -219,7 +226,10 @@ export function IssueStatusChart({ issues }: { issues: { status: string; created
         })}
       </div>
       <DateLabels days={days} />
-      <ChartLegend items={statusOrder.map(s => ({ color: statusColors[s] ?? "#6b7280", label: statusLabels[s] ?? s }))} />
+      <ChartLegend items={statusOrder.map((status) => ({
+        color: statusMeta.get(status)?.color ?? "#6b7280",
+        label: statusMeta.get(status)?.label ?? status,
+      }))} />
     </div>
   );
 }

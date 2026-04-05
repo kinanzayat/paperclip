@@ -144,4 +144,39 @@ describe("CommentThread", () => {
       root.unmount();
     });
   });
+
+  it("renders non-agent comment authors from server metadata", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <CommentThread
+            comments={[{
+              id: "comment-1",
+              companyId: "company-1",
+              issueId: "issue-1",
+              authorAgentId: null,
+              authorUserId: "user-2",
+              authorName: "Abood",
+              authorImage: null,
+              authorType: "user",
+              body: "I reviewed this.",
+              createdAt: new Date("2026-03-11T09:00:00.000Z"),
+              updatedAt: new Date("2026-03-11T09:00:00.000Z"),
+            }]}
+            currentUserId="user-1"
+            onAdd={async () => {}}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(container.textContent).toContain("Abood");
+    expect(container.textContent).not.toContain("You");
+
+    act(() => {
+      root.unmount();
+    });
+  });
 });

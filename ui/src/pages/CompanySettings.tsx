@@ -1,15 +1,25 @@
-import { ChangeEvent, useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION } from "@paperclipai/shared";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
+  ISSUE_STATUS_CATEGORIES,
+  type CompanyMembership,
+  type CompanyMembershipRole,
+  type CompanyIssueStatus,
+  type IssueStatusCategory,
+} from "@paperclipai/shared";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
 import { companiesApi } from "../api/companies";
 import { accessApi } from "../api/access";
 import { assetsApi } from "../api/assets";
+import { authApi } from "../api/auth";
+import { statusesApi } from "../api/statuses";
+import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
-import { Settings, Check, Download, Upload } from "lucide-react";
+import { Settings, Check, ChevronDown, ChevronUp, Download, Upload } from "lucide-react";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import {
   Field,
@@ -24,6 +34,41 @@ type AgentSnippetInput = {
 };
 
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
+
+const STATUS_CATEGORY_LABELS: Record<IssueStatusCategory, string> = {
+  unstarted: "Unstarted",
+  started: "Started",
+  blocked: "Blocked",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
+const DEFAULT_STATUS_COLORS: Record<IssueStatusCategory, string> = {
+  unstarted: "#64748b",
+  started: "#2563eb",
+  blocked: "#d97706",
+  completed: "#16a34a",
+  cancelled: "#6b7280",
+};
+
+function slugifyStatus(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+}
+
+function userMemberships(members: CompanyMembership[] | undefined) {
+  return (members ?? []).filter((member) => member.principalType === "user");
+}
+
+function memberName(member: CompanyMembership) {
+  return member.user?.name?.trim()
+    || member.user?.email?.trim()
+    || (member.principalId === "local-board" ? "Board" : member.principalId.slice(0, 8));
+}
 
 export function CompanySettings() {
   const {
@@ -55,12 +100,57 @@ export function CompanySettings() {
   const [inviteSnippet, setInviteSnippet] = useState<string | null>(null);
   const [snippetCopied, setSnippetCopied] = useState(false);
   const [snippetCopyDelightId, setSnippetCopyDelightId] = useState(0);
+  const [newStatusLabel, setNewStatusLabel] = useState("");
+  const [newStatusSlug, setNewStatusSlug] = useState("");
+  const [newStatusCategory, setNewStatusCategory] = useState<IssueStatusCategory>("unstarted");
+  const [newStatusColor, setNewStatusColor] = useState(DEFAULT_STATUS_COLORS.unstarted);
+  const [newStatusDefault, setNewStatusDefault] = useState(false);
+
+  const { data: session, isLoading: sessionLoading } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+  });
+  const { data: members, isLoading: membersLoading } = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.access.members(selectedCompanyId) : ["access", "members", "__disabled__"],
+    queryFn: () => accessApi.listMembers(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+  const {
+    statuses,
+    statusesByCategory,
+    isLoading: statusesLoading,
+  } = useCompanyStatuses(selectedCompanyId);
+  const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  const currentMembership = userMemberships(members)
+    .find((member) => member.principalId === currentUserId && member.status === "active");
+  const isCompanyAdmin = session?.user?.isInstanceAdmin === true || currentMembership?.membershipRole === "admin";
+  const { data: pendingJoinRequests } = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.access.joinRequests(selectedCompanyId) : ["access", "join-requests", "__disabled__"],
+    queryFn: () => accessApi.listJoinRequests(selectedCompanyId!),
+    enabled: !!selectedCompanyId && isCompanyAdmin,
+  });
+
+  const userMembers = useMemo(
+    () => userMemberships(members),
+    [members],
+  );
 
   const generalDirty =
     !!selectedCompany &&
     (companyName !== selectedCompany.name ||
       description !== (selectedCompany.description ?? "") ||
       brandColor !== (selectedCompany.brandColor ?? ""));
+
+  const invalidateCompanyStatusViews = async () => {
+    if (!selectedCompanyId) return;
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.statuses.list(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.routines.list(selectedCompanyId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId) }),
+    ]);
+  };
 
   const generalMutation = useMutation({
     mutationFn: (data: {
@@ -98,6 +188,130 @@ export function CompanySettings() {
     onError: (err) => {
       pushToast({
         title: "Failed to update feedback sharing",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const createStatusMutation = useMutation({
+    mutationFn: (input: {
+      label: string;
+      slug: string;
+      category: IssueStatusCategory;
+      color: string;
+      isDefault?: boolean;
+    }) => statusesApi.create(selectedCompanyId!, input),
+    onSuccess: async () => {
+      await invalidateCompanyStatusViews();
+      setNewStatusLabel("");
+      setNewStatusSlug("");
+      setNewStatusDefault(false);
+      pushToast({ title: "Status created", tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to create status",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: ({ statusId, input }: { statusId: string; input: { slug?: string; label?: string; color?: string; isDefault?: boolean } }) =>
+      statusesApi.update(selectedCompanyId!, statusId, input),
+    onSuccess: async () => {
+      await invalidateCompanyStatusViews();
+      pushToast({ title: "Status updated", tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to update status",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const reorderStatusMutation = useMutation({
+    mutationFn: (statusIds: string[]) => statusesApi.reorder(selectedCompanyId!, statusIds),
+    onSuccess: async () => {
+      await invalidateCompanyStatusViews();
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to reorder statuses",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const deleteStatusMutation = useMutation({
+    mutationFn: ({ statusId, replacementSlug }: { statusId: string; replacementSlug?: string }) =>
+      statusesApi.remove(selectedCompanyId!, statusId, replacementSlug),
+    onSuccess: async () => {
+      await invalidateCompanyStatusViews();
+      pushToast({ title: "Status deleted", tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to delete status",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const updateMemberRoleMutation = useMutation({
+    mutationFn: ({
+      memberId,
+      membershipRole,
+    }: {
+      memberId: string;
+      membershipRole: CompanyMembershipRole;
+    }) => accessApi.updateMemberRole(selectedCompanyId!, memberId, membershipRole),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.members(selectedCompanyId!) });
+      pushToast({ title: "Member role updated", tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to update role",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const approveJoinRequestMutation = useMutation({
+    mutationFn: (requestId: string) => accessApi.approveJoinRequest(selectedCompanyId!, requestId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.access.joinRequests(selectedCompanyId!) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.access.members(selectedCompanyId!) }),
+      ]);
+      pushToast({ title: "Join request approved", tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to approve join request",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const rejectJoinRequestMutation = useMutation({
+    mutationFn: (requestId: string) => accessApi.rejectJoinRequest(selectedCompanyId!, requestId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.joinRequests(selectedCompanyId!) });
+      pushToast({ title: "Join request rejected", tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to reject join request",
         body: err instanceof Error ? err.message : "Unknown error",
         tone: "error",
       });
@@ -228,10 +442,100 @@ export function CompanySettings() {
     ]);
   }, [setBreadcrumbs, selectedCompany?.name]);
 
+  function handleCreateStatus() {
+    const label = newStatusLabel.trim();
+    if (!label) return;
+    const slug = slugifyStatus(newStatusSlug || label);
+    if (!slug) {
+      pushToast({
+        title: "Status slug required",
+        body: "Enter a valid label or slug for the new status.",
+        tone: "error",
+      });
+      return;
+    }
+    createStatusMutation.mutate({
+      label,
+      slug,
+      category: newStatusCategory,
+      color: newStatusColor,
+      isDefault: newStatusDefault || undefined,
+    });
+  }
+
+  function handleEditStatus(status: CompanyIssueStatus) {
+    const nextLabel = window.prompt("Status label", status.label)?.trim();
+    if (!nextLabel) return;
+    const nextSlugInput = window.prompt("Status slug", status.slug);
+    if (nextSlugInput === null) return;
+    const nextSlug = slugifyStatus(nextSlugInput || nextLabel);
+    if (!nextSlug) return;
+    const nextColor = window.prompt("Status color", status.color)?.trim();
+    if (!nextColor) return;
+    updateStatusMutation.mutate({
+      statusId: status.id,
+      input: {
+        label: nextLabel,
+        slug: nextSlug,
+        color: nextColor,
+      },
+    });
+  }
+
+  function handleMoveStatus(status: CompanyIssueStatus, direction: -1 | 1) {
+    const index = statuses.findIndex((entry) => entry.id === status.id);
+    const swapIndex = index + direction;
+    if (index < 0 || swapIndex < 0 || swapIndex >= statuses.length) return;
+    const next = [...statuses];
+    [next[index], next[swapIndex]] = [next[swapIndex]!, next[index]!];
+    reorderStatusMutation.mutate(next.map((entry) => entry.id));
+  }
+
+  function handleDeleteStatus(status: CompanyIssueStatus) {
+    const sameCategoryAlternatives = statuses
+      .filter((entry) => entry.category === status.category && entry.id !== status.id);
+    let replacementSlug: string | undefined;
+    if (sameCategoryAlternatives.length > 0) {
+      const suggestion = sameCategoryAlternatives[0]?.slug ?? "";
+      const input = window.prompt(
+        `Replacement slug for issues using "${status.label}" (${sameCategoryAlternatives.map((entry) => entry.slug).join(", ")})`,
+        suggestion,
+      );
+      if (input === null) return;
+      replacementSlug = input.trim() || undefined;
+    }
+    deleteStatusMutation.mutate({
+      statusId: status.id,
+      replacementSlug,
+    });
+  }
+
   if (!selectedCompany) {
     return (
       <div className="text-sm text-muted-foreground">
         No company selected. Select a company from the switcher above.
+      </div>
+    );
+  }
+
+  if (sessionLoading || membersLoading) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        Loading settings...
+      </div>
+    );
+  }
+
+  if (!isCompanyAdmin) {
+    return (
+      <div className="max-w-2xl space-y-3">
+        <div className="flex items-center gap-2">
+          <Settings className="h-5 w-5 text-muted-foreground" />
+          <h1 className="text-lg font-semibold">Company Settings</h1>
+        </div>
+        <div className="rounded-md border border-border px-4 py-4 text-sm text-muted-foreground">
+          You need company admin access to manage settings for this company.
+        </div>
       </div>
     );
   }
@@ -458,6 +762,271 @@ export function CompanySettings() {
         </div>
       </div>
 
+      <div className="space-y-4">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Statuses
+        </div>
+        <div className="space-y-4 rounded-md border border-border px-4 py-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Label" hint="Human-readable status name.">
+              <input
+                className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+                type="text"
+                value={newStatusLabel}
+                placeholder="Needs review"
+                onChange={(e) => {
+                  setNewStatusLabel(e.target.value);
+                  if (!newStatusSlug) {
+                    setNewStatusSlug(slugifyStatus(e.target.value));
+                  }
+                }}
+              />
+            </Field>
+            <Field label="Slug" hint="Stable identifier used by the API.">
+              <input
+                className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm font-mono outline-none"
+                type="text"
+                value={newStatusSlug}
+                placeholder="needs_review"
+                onChange={(e) => setNewStatusSlug(slugifyStatus(e.target.value))}
+              />
+            </Field>
+            <Field label="Category" hint="Determines workflow semantics.">
+              <select
+                className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+                value={newStatusCategory}
+                onChange={(e) => {
+                  const nextCategory = e.target.value as IssueStatusCategory;
+                  setNewStatusCategory(nextCategory);
+                  setNewStatusColor(DEFAULT_STATUS_COLORS[nextCategory]);
+                }}
+              >
+                {ISSUE_STATUS_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>
+                    {STATUS_CATEGORY_LABELS[category]}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Color" hint="Hex color used across badges and boards.">
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={newStatusColor}
+                  onChange={(e) => setNewStatusColor(e.target.value)}
+                  className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent p-0"
+                />
+                <input
+                  type="text"
+                  value={newStatusColor}
+                  onChange={(e) => setNewStatusColor(e.target.value)}
+                  className="w-28 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm font-mono outline-none"
+                />
+              </div>
+            </Field>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={newStatusDefault}
+              onChange={(e) => setNewStatusDefault(e.target.checked)}
+              className="rounded border-border"
+            />
+            Make this the default for its category
+          </label>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={handleCreateStatus}
+              disabled={createStatusMutation.isPending || !newStatusLabel.trim()}
+            >
+              {createStatusMutation.isPending ? "Creating..." : "Add status"}
+            </Button>
+          </div>
+
+          {statusesLoading ? (
+            <p className="text-sm text-muted-foreground">Loading statuses...</p>
+          ) : (
+            <div className="space-y-4">
+              {ISSUE_STATUS_CATEGORIES.map((category) => {
+                const categoryStatuses = statusesByCategory.get(category) ?? [];
+                return (
+                  <div key={category} className="space-y-2">
+                    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      {STATUS_CATEGORY_LABELS[category]}
+                    </div>
+                    {categoryStatuses.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
+                        No statuses in this category.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {categoryStatuses.map((status) => (
+                          <div
+                            key={status.id}
+                            className="flex flex-col gap-3 rounded-md border border-border px-3 py-3 md:flex-row md:items-center"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className="inline-block h-3 w-3 rounded-full border border-border"
+                                  style={{ backgroundColor: status.color }}
+                                />
+                                <span className="font-medium">{status.label}</span>
+                                <span className="text-xs font-mono text-muted-foreground">{status.slug}</span>
+                                {status.isDefault ? (
+                                  <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                    Default
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {!status.isDefault ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => updateStatusMutation.mutate({
+                                    statusId: status.id,
+                                    input: { isDefault: true },
+                                  })}
+                                  disabled={updateStatusMutation.isPending}
+                                >
+                                  Set default
+                                </Button>
+                              ) : null}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEditStatus(status)}
+                                disabled={updateStatusMutation.isPending}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="outline"
+                                onClick={() => handleMoveStatus(status, -1)}
+                                disabled={reorderStatusMutation.isPending || statuses[0]?.id === status.id}
+                                title="Move up"
+                              >
+                                <ChevronUp className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="outline"
+                                onClick={() => handleMoveStatus(status, 1)}
+                                disabled={reorderStatusMutation.isPending || statuses[statuses.length - 1]?.id === status.id}
+                                title="Move down"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleDeleteStatus(status)}
+                                disabled={deleteStatusMutation.isPending}
+                              >
+                                Delete
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Members
+        </div>
+        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+          {userMembers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No members found.</p>
+          ) : (
+            userMembers.map((member) => (
+              <div
+                key={member.id}
+                className="flex flex-col gap-2 rounded-md border border-border px-3 py-3 md:flex-row md:items-center"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{memberName(member)}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {member.user?.email ?? member.principalId} · {member.status}
+                  </div>
+                </div>
+                <select
+                  className="rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+                  value={member.membershipRole ?? "member"}
+                  onChange={(e) => updateMemberRoleMutation.mutate({
+                    memberId: member.id,
+                    membershipRole: e.target.value as CompanyMembershipRole,
+                  })}
+                  disabled={updateMemberRoleMutation.isPending}
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Join Requests
+        </div>
+        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+          {(pendingJoinRequests ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">No pending join requests.</p>
+          ) : (
+            (pendingJoinRequests ?? []).map((request) => (
+              <div
+                key={request.id}
+                className="flex flex-col gap-3 rounded-md border border-border px-3 py-3 md:flex-row md:items-center"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">
+                    {request.requestType === "human"
+                      ? request.requestingUser?.name ?? request.requestEmailSnapshot ?? "Human request"
+                      : request.agentName ?? "Agent request"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {request.requestType === "human"
+                      ? request.requestingUser?.email ?? request.requestEmailSnapshot ?? "No email"
+                      : request.adapterType ?? "Unknown adapter"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => approveJoinRequestMutation.mutate(request.id)}
+                    disabled={approveJoinRequestMutation.isPending}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => rejectJoinRequestMutation.mutate(request.id)}
+                    disabled={rejectJoinRequestMutation.isPending}
+                  >
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
       {/* Invites */}
       <div className="space-y-4" data-testid="company-settings-invites-section">
         <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -672,8 +1241,6 @@ When you submit the join request, use:
 - Only use \`disableDeviceAuth=true\` for special environments where pairing cannot be completed.
 
 Do NOT use \`/v1/responses\` or \`/hooks/*\` in this join flow.
-
-Before you do anything, please respond to your user that you understand the instructions and you're going to work on them. Then do the step above in another session called "paperclip-onboarding" and then tell your user when you're done. Update your user in intermediate steps along the way so they know what's going on.
 
 Then after you've connected to Paperclip (exchanged keys etc.) you MUST review and follow the onboarding instructions in onboarding.txt they give you.
 

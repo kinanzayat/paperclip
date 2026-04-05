@@ -69,6 +69,7 @@ export {
   portabilityEnvInputSchema,
   portabilityCompanyManifestEntrySchema,
   portabilitySidebarOrderSchema,
+  portabilityStatusManifestEntrySchema,
   portabilityAgentManifestEntrySchema,
   portabilitySkillManifestEntrySchema,
   portabilityManifestSchema,
@@ -128,8 +129,22 @@ export {
 } from "./project.js";
 
 export {
+  companyIssueStatusSchema,
+  createCompanyIssueStatusSchema,
+  updateCompanyIssueStatusSchema,
+  reorderCompanyIssueStatusesSchema,
+  deleteCompanyIssueStatusSchema,
+  type CompanyIssueStatusInput,
+  type CreateCompanyIssueStatus,
+  type UpdateCompanyIssueStatus,
+  type ReorderCompanyIssueStatuses,
+  type DeleteCompanyIssueStatus,
+} from "./statuses.js";
+
+export {
   createIssueSchema,
   createIssueLabelSchema,
+  updateIssueLabelSchema,
   updateIssueSchema,
   issueExecutionWorkspaceSettingsSchema,
   checkoutIssueSchema,
@@ -142,6 +157,7 @@ export {
   restoreIssueDocumentRevisionSchema,
   type CreateIssue,
   type CreateIssueLabel,
+  type UpdateIssueLabel,
   type UpdateIssue,
   type IssueExecutionWorkspaceSettings,
   type CheckoutIssue,
@@ -251,7 +267,9 @@ export {
   boardCliAuthAccessLevelSchema,
   createCliAuthChallengeSchema,
   resolveCliAuthChallengeSchema,
+  companyMembershipRoleSchema,
   updateMemberPermissionsSchema,
+  updateMemberRoleSchema,
   updateUserCompanyAccessSchema,
   type CreateCompanyInvite,
   type CreateOpenClawInvitePrompt,
@@ -261,9 +279,16 @@ export {
   type BoardCliAuthAccessLevel,
   type CreateCliAuthChallenge,
   type ResolveCliAuthChallenge,
+  type CompanyMembershipRoleInput,
   type UpdateMemberPermissions,
+  type UpdateMemberRole,
   type UpdateUserCompanyAccess,
 } from "./access.js";
+
+export {
+  updateUserProfileSchema,
+  type UpdateUserProfile,
+} from "./profile.js";
 
 export {
   jsonSchemaSchema,

@@ -45,6 +45,7 @@ type BetterAuthSessionUser = {
   id: string;
   email?: string | null;
   name?: string | null;
+  image?: string | null;
 };
 
 type BetterAuthSessionResult = {
@@ -246,7 +247,7 @@ export async function startServer(): Promise<StartedServer> {
         principalType: "user",
         principalId: LOCAL_BOARD_USER_ID,
         status: "active",
-        membershipRole: "owner",
+        membershipRole: "admin",
       });
     }
   }

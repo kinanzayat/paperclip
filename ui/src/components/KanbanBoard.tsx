@@ -17,24 +17,11 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import type { CompanyIssueStatus, Issue } from "@paperclipai/shared";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon } from "./PriorityIcon";
 import { Identity } from "./Identity";
-import type { Issue } from "@paperclipai/shared";
-
-const boardStatuses = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "in_review",
-  "blocked",
-  "done",
-  "cancelled",
-];
-
-function statusLabel(status: string): string {
-  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
+import { issueStatusLabel } from "../lib/status-colors";
 
 interface Agent {
   id: string;
@@ -43,6 +30,7 @@ interface Agent {
 
 interface KanbanBoardProps {
   issues: Issue[];
+  statuses: CompanyIssueStatus[];
   agents?: Agent[];
   liveIssueIds?: Set<string>;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
@@ -52,11 +40,13 @@ interface KanbanBoardProps {
 
 function KanbanColumn({
   status,
+  statuses,
   issues,
   agents,
   liveIssueIds,
 }: {
   status: string;
+  statuses: CompanyIssueStatus[];
   issues: Issue[];
   agents?: Agent[];
   liveIssueIds?: Set<string>;
@@ -66,9 +56,9 @@ function KanbanColumn({
   return (
     <div className="flex flex-col min-w-[260px] w-[260px] shrink-0">
       <div className="flex items-center gap-2 px-2 py-2 mb-1">
-        <StatusIcon status={status} />
+        <StatusIcon status={status} statuses={statuses} />
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {statusLabel(status)}
+          {issueStatusLabel(status, { statuses })}
         </span>
         <span className="text-xs text-muted-foreground/60 ml-auto tabular-nums">
           {issues.length}
@@ -182,6 +172,7 @@ function KanbanCard({
 
 export function KanbanBoard({
   issues,
+  statuses,
   agents,
   liveIssueIds,
   onUpdateIssue,
@@ -194,8 +185,8 @@ export function KanbanBoard({
 
   const columnIssues = useMemo(() => {
     const grouped: Record<string, Issue[]> = {};
-    for (const status of boardStatuses) {
-      grouped[status] = [];
+    for (const status of statuses) {
+      grouped[status.slug] = [];
     }
     for (const issue of issues) {
       if (grouped[issue.status]) {
@@ -203,7 +194,7 @@ export function KanbanBoard({
       }
     }
     return grouped;
-  }, [issues]);
+  }, [issues, statuses]);
 
   const activeIssue = useMemo(
     () => (activeId ? issues.find((i) => i.id === activeId) : null),
@@ -227,7 +218,7 @@ export function KanbanBoard({
     // or another card's id. Find which column the "over" belongs to.
     let targetStatus: string | null = null;
 
-    if (boardStatuses.includes(over.id as string)) {
+    if (statuses.some((status) => status.slug === over.id)) {
       targetStatus = over.id as string;
     } else {
       // It's a card - find which column it's in
@@ -254,11 +245,12 @@ export function KanbanBoard({
       onDragEnd={handleDragEnd}
     >
       <div className="flex gap-3 overflow-x-auto pb-4 -mx-2 px-2">
-        {boardStatuses.map((status) => (
+        {statuses.map((status) => (
           <KanbanColumn
-            key={status}
-            status={status}
-            issues={columnIssues[status] ?? []}
+            key={status.id}
+            status={status.slug}
+            statuses={statuses}
+            issues={columnIssues[status.slug] ?? []}
             agents={agents}
             liveIssueIds={liveIssueIds}
           />

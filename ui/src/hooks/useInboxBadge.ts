@@ -6,6 +6,7 @@ import { approvalsApi } from "../api/approvals";
 import { dashboardApi } from "../api/dashboard";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
+import { useCompanyStatuses } from "./useCompanyStatuses";
 import { queryKeys } from "../lib/queryKeys";
 import {
   computeInboxBadgeData,
@@ -16,8 +17,6 @@ import {
   saveReadInboxItems,
   READ_ITEMS_KEY,
 } from "../lib/inbox";
-
-const INBOX_ISSUE_STATUSES = "backlog,todo,in_progress,in_review,blocked,done";
 
 export function useDismissedInboxItems() {
   const [dismissed, setDismissed] = useState<Set<string>>(loadDismissedInboxItems);
@@ -78,6 +77,14 @@ export function useReadInboxItems() {
 
 export function useInboxBadge(companyId: string | null | undefined) {
   const { dismissed } = useDismissedInboxItems();
+  const { statuses: companyStatuses } = useCompanyStatuses(companyId);
+  const inboxStatusFilter = useMemo(
+    () => companyStatuses
+      .filter((status) => status.category !== "cancelled")
+      .map((status) => status.slug)
+      .join(","),
+    [companyStatuses],
+  );
 
   const { data: approvals = [] } = useQuery({
     queryKey: queryKeys.approvals.list(companyId!),
@@ -113,9 +120,9 @@ export function useInboxBadge(companyId: string | null | undefined) {
       issuesApi.list(companyId!, {
         touchedByUserId: "me",
         inboxArchivedByUserId: "me",
-        status: INBOX_ISSUE_STATUSES,
+        status: inboxStatusFilter,
       }),
-    enabled: !!companyId,
+    enabled: !!companyId && inboxStatusFilter.length > 0,
   });
 
   const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);

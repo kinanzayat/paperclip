@@ -1,5 +1,10 @@
 import type { CSSProperties } from "react";
-import { parseAgentMentionHref, parseProjectMentionHref, parseSkillMentionHref } from "@paperclipai/shared";
+import {
+  parseAgentMentionHref,
+  parseProjectMentionHref,
+  parseSkillMentionHref,
+  parseUserMentionHref,
+} from "@paperclipai/shared";
 import { getAgentIcon } from "./agent-icons";
 import { hexToRgb, pickTextColorForPillBg } from "./color-contrast";
 
@@ -18,6 +23,10 @@ export type ParsedMentionChip =
       kind: "skill";
       skillId: string;
       slug: string | null;
+    }
+  | {
+      kind: "user";
+      userId: string;
     };
 
 const iconMaskCache = new Map<string, string>();
@@ -47,6 +56,14 @@ export function parseMentionChipHref(href: string): ParsedMentionChip | null {
       kind: "skill",
       skillId: skill.skillId,
       slug: skill.slug,
+    };
+  }
+
+  const user = parseUserMentionHref(href);
+  if (user) {
+    return {
+      kind: "user",
+      userId: user.userId,
     };
   }
 
@@ -101,6 +118,7 @@ export function clearMentionChipDecoration(element: HTMLElement) {
     "paperclip-mention-chip--agent",
     "paperclip-mention-chip--project",
     "paperclip-mention-chip--skill",
+    "paperclip-mention-chip--user",
     "paperclip-project-mention-chip",
   );
   element.removeAttribute("contenteditable");
