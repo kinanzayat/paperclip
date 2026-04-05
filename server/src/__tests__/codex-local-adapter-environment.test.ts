@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-codex-local/server";
+import * as serverUtils from "@paperclipai/adapter-utils/server-utils";
 
 const itWindows = process.platform === "win32" ? it : it.skip;
 
@@ -137,6 +138,65 @@ describe("codex_local environment diagnostics", () => {
       expect(result.checks.some((check) => check.code === "codex_hello_probe_passed")).toBe(true);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports quota exhaustion as a warning instead of throwing", async () => {
+    const runChildProcessSpy = vi
+      .spyOn(serverUtils, "runChildProcess")
+      .mockResolvedValue({
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        stdout: "",
+        stderr:
+          "You've hit your usage limit. visit https://chatgpt.com/codex/settings/usage to purchase more credits.",
+        pid: 123,
+        startedAt: new Date().toISOString(),
+      });
+
+    try {
+      const result = await testEnvironment({
+        companyId: "company-1",
+        adapterType: "codex_local",
+        config: {
+          command: "codex",
+          cwd: process.cwd(),
+          env: {
+            OPENAI_API_KEY: "test-key",
+          },
+        },
+      });
+
+      expect(result.status).toBe("warn");
+      expect(result.checks.some((check) => check.code === "codex_hello_probe_quota_exceeded")).toBe(true);
+    } finally {
+      runChildProcessSpy.mockRestore();
+    }
+  });
+
+  it("reports spawn failures as warnings instead of throwing", async () => {
+    const runChildProcessSpy = vi
+      .spyOn(serverUtils, "runChildProcess")
+      .mockRejectedValue(new Error("Failed to start command \"codex\" in \"/tmp\": spawn EPERM"));
+
+    try {
+      const result = await testEnvironment({
+        companyId: "company-1",
+        adapterType: "codex_local",
+        config: {
+          command: "codex",
+          cwd: process.cwd(),
+          env: {
+            OPENAI_API_KEY: "test-key",
+          },
+        },
+      });
+
+      expect(result.status).toBe("warn");
+      expect(result.checks.some((check) => check.code === "codex_hello_probe_unavailable")).toBe(true);
+    } finally {
+      runChildProcessSpy.mockRestore();
     }
   });
 });

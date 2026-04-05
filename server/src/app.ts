@@ -287,18 +287,22 @@ export async function createApp(
   if (opts.uiMode === "vite-dev") {
     const uiRoot = path.resolve(__dirname, "../../ui");
     const hmrPort = resolveViteHmrPort(opts.serverPort);
+    const wildcardBindHost = opts.bindHost === "0.0.0.0" || opts.bindHost === "::";
+    const hmrEnabled = opts.deploymentExposure !== "public";
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       root: uiRoot,
       appType: "custom",
       server: {
         middlewareMode: true,
-        hmr: {
-          host: opts.bindHost,
-          port: hmrPort,
-          clientPort: hmrPort,
-        },
-        allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
+        hmr: hmrEnabled
+          ? {
+            host: wildcardBindHost ? "localhost" : opts.bindHost,
+            port: hmrPort,
+            clientPort: hmrPort,
+          }
+          : false,
+        allowedHosts: Array.from(privateHostnameAllowSet),
       },
     });
 

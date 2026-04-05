@@ -51,6 +51,8 @@ function summarizeProbeDetail(stdout: string, stderr: string, parsedError: strin
 
 const CODEX_AUTH_REQUIRED_RE =
   /(?:not\s+logged\s+in|login\s+required|authentication\s+required|unauthorized|invalid(?:\s+or\s+missing)?\s+api(?:[_\s-]?key)?|openai[_\s-]?api[_\s-]?key|api[_\s-]?key.*required|please\s+run\s+`?codex\s+login`?)/i;
+const CODEX_USAGE_LIMIT_RE =
+  /(?:usage\s+limit|rate\s+limit|quota\s+exceeded|credits?\s+(?:exhausted|depleted)|try\s+again\s+at|purchase\s+more\s+credits|chatgpt\.com\/codex\/settings\/usage)/i;
 
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
@@ -166,22 +168,65 @@ export async function testEnvironment(
       if (extraArgs.length > 0) args.push(...extraArgs);
       args.push("-");
 
-      const probe = await runChildProcess(
-        `codex-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        command,
-        args,
-        {
-          cwd,
-          env,
-          timeoutSec: 45,
-          graceSec: 5,
-          stdin: "Respond with hello.",
-          onLog: async () => {},
-        },
-      );
+      let probe: Awaited<ReturnType<typeof runChildProcess>> | null = null;
+      let probeError: Error | null = null;
+      try {
+        probe = await runChildProcess(
+          `codex-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          command,
+          args,
+          {
+            cwd,
+            env,
+            timeoutSec: 45,
+            graceSec: 5,
+            stdin: "Respond with hello.",
+            onLog: async () => {},
+          },
+        );
+      } catch (error) {
+        probeError = error instanceof Error ? error : new Error(String(error));
+      }
+
+      if (probeError) {
+        const detail = summarizeProbeDetail("", probeError.message, null);
+        if (CODEX_USAGE_LIMIT_RE.test(probeError.message)) {
+          checks.push({
+            code: "codex_hello_probe_quota_exceeded",
+            level: "warn",
+            message: "Codex CLI is installed, but this account has reached its usage limit.",
+            ...(detail ? { detail } : {}),
+            hint: "Switch to an account with available quota or wait for reset, then retry the probe.",
+          });
+        } else if (CODEX_AUTH_REQUIRED_RE.test(probeError.message)) {
+          checks.push({
+            code: "codex_hello_probe_auth_required",
+            level: "warn",
+            message: "Codex CLI is installed, but authentication is not ready.",
+            ...(detail ? { detail } : {}),
+            hint: "Configure OPENAI_API_KEY in adapter env/shell or run `codex login`, then retry the probe.",
+          });
+        } else {
+          checks.push({
+            code: "codex_hello_probe_unavailable",
+            level: "warn",
+            message: "Codex hello probe could not be started in this environment.",
+            ...(detail ? { detail } : {}),
+            hint: "Verify the Codex CLI command and permissions, then retry the probe.",
+          });
+        }
+        return {
+          adapterType: ctx.adapterType,
+          status: summarizeStatus(checks),
+          checks,
+          testedAt: new Date().toISOString(),
+        };
+      }
+
       const parsed = parseCodexJsonl(probe.stdout);
       const detail = summarizeProbeDetail(probe.stdout, probe.stderr, parsed.errorMessage);
       const authEvidence = `${parsed.errorMessage ?? ""}\n${probe.stdout}\n${probe.stderr}`.trim();
+      const quotaEvidence = `${probe.stdout}\n${probe.stderr}\n${parsed.errorMessage ?? ""}`.trim();
 
       if (probe.timedOut) {
         checks.push({
@@ -213,6 +258,14 @@ export async function testEnvironment(
           message: "Codex CLI is installed, but authentication is not ready.",
           ...(detail ? { detail } : {}),
           hint: "Configure OPENAI_API_KEY in adapter env/shell or run `codex login`, then retry the probe.",
+        });
+      } else if (CODEX_USAGE_LIMIT_RE.test(quotaEvidence)) {
+        checks.push({
+          code: "codex_hello_probe_quota_exceeded",
+          level: "warn",
+          message: "Codex CLI is installed, but this account has reached its usage limit.",
+          ...(detail ? { detail } : {}),
+          hint: "Switch to an account with available quota or wait for reset, then retry the probe.",
         });
       } else {
         checks.push({

@@ -33,6 +33,8 @@ type AgentSnippetInput = {
   testResolutionUrl?: string | null;
 };
 
+type InviteSnippetKind = "agent" | "human";
+
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
 
 const STATUS_CATEGORY_LABELS: Record<IssueStatusCategory, string> = {
@@ -98,6 +100,7 @@ export function CompanySettings() {
 
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSnippet, setInviteSnippet] = useState<string | null>(null);
+  const [inviteSnippetKind, setInviteSnippetKind] = useState<InviteSnippetKind>("agent");
   const [snippetCopied, setSnippetCopied] = useState(false);
   const [snippetCopyDelightId, setSnippetCopyDelightId] = useState(0);
   const [newStatusLabel, setNewStatusLabel] = useState("");
@@ -323,6 +326,7 @@ export function CompanySettings() {
       accessApi.createOpenClawInvitePrompt(selectedCompanyId!),
     onSuccess: async (invite) => {
       setInviteError(null);
+      setInviteSnippetKind("agent");
       const base = window.location.origin.replace(/\/+$/, "");
       const onboardingTextLink =
         invite.onboardingTextUrl ??
@@ -371,6 +375,40 @@ export function CompanySettings() {
     }
   });
 
+  const humanInviteMutation = useMutation({
+    mutationFn: () =>
+      accessApi.createCompanyInvite(selectedCompanyId!, { allowedJoinTypes: "human" }),
+    onSuccess: async (invite) => {
+      setInviteError(null);
+      setInviteSnippetKind("human");
+      const inviteLink = invite.inviteUrl.startsWith("http")
+        ? invite.inviteUrl
+        : `${window.location.origin.replace(/\/+$/, "")}${invite.inviteUrl}`;
+      const snippet = [
+        "Invite a new human member to join this company:",
+        inviteLink,
+        "",
+        "They should open the link, sign in or create an account, and submit the join request.",
+      ].join("\n");
+      setInviteSnippet(snippet);
+      setSnippetCopied(false);
+      setSnippetCopyDelightId(0);
+      try {
+        await navigator.clipboard.writeText(snippet);
+        setSnippetCopied(true);
+        setSnippetCopyDelightId((prev) => prev + 1);
+        setTimeout(() => setSnippetCopied(false), 2000);
+      } catch {
+        /* clipboard may not be available */
+      }
+    },
+    onError: (err) => {
+      setInviteError(
+        err instanceof Error ? err.message : "Failed to create human invite"
+      );
+    },
+  });
+
   const syncLogoState = (nextLogoUrl: string | null) => {
     setLogoUrl(nextLogoUrl ?? "");
     void queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
@@ -410,6 +448,7 @@ export function CompanySettings() {
   useEffect(() => {
     setInviteError(null);
     setInviteSnippet(null);
+    setInviteSnippetKind("agent");
     setSnippetCopied(false);
     setSnippetCopyDelightId(0);
   }, [selectedCompanyId]);
@@ -1035,14 +1074,25 @@ export function CompanySettings() {
         <div className="space-y-3 rounded-md border border-border px-4 py-4">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">
-              Generate an OpenClaw agent invite snippet.
+              Invite a human member or generate an OpenClaw agent invite snippet.
             </span>
-            <HintIcon text="Creates a short-lived OpenClaw agent invite and renders a copy-ready prompt." />
+            <HintIcon text="Human invites create a direct company join link. OpenClaw invites generate onboarding text for agent registration." />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
+              data-testid="company-settings-invites-generate-member-button"
+              size="sm"
+              onClick={() => humanInviteMutation.mutate()}
+              disabled={humanInviteMutation.isPending}
+            >
+              {humanInviteMutation.isPending
+                ? "Generating..."
+                : "Generate Member Invite Link"}
+            </Button>
+            <Button
               data-testid="company-settings-invites-generate-button"
               size="sm"
+              variant="outline"
               onClick={() => inviteMutation.mutate()}
               disabled={inviteMutation.isPending}
             >
@@ -1061,7 +1111,7 @@ export function CompanySettings() {
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs text-muted-foreground">
-                  OpenClaw Invite Prompt
+                  {inviteSnippetKind === "human" ? "Member Invite Link" : "OpenClaw Invite Prompt"}
                 </div>
                 {snippetCopied && (
                   <span
