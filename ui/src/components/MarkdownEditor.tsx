@@ -1,5 +1,4 @@
 import {
-  type ClipboardEvent,
   forwardRef,
   useCallback,
   useEffect,
@@ -34,7 +33,7 @@ import { AgentIcon } from "./AgentIconPicker";
 import { applyMentionChipDecoration, clearMentionChipDecoration, parseMentionChipHref } from "../lib/mention-chips";
 import { MentionAwareLinkNode, mentionAwareLinkNodeReplacement } from "../lib/mention-aware-link-node";
 import { mentionDeletionPlugin } from "../lib/mention-deletion";
-import { looksLikeMarkdownPaste } from "../lib/markdownPaste";
+import { interceptMarkdownPasteEvent } from "../lib/markdownPaste";
 import { normalizeMarkdown } from "../lib/normalize-markdown";
 import { pasteNormalizationPlugin } from "../lib/paste-normalization";
 import { cn } from "../lib/utils";
@@ -659,19 +658,29 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   }
 
   const canDropImage = Boolean(imageUploadHandler);
-  const handlePasteCapture = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
-    const clipboard = event.clipboardData;
-    if (!clipboard || !ref.current) return;
-    const types = new Set(Array.from(clipboard.types));
-    if (types.has("Files") || types.has("text/html")) return;
-    if (isSelectionInsideCodeLikeElement(containerRef.current)) return;
 
-    const rawText = clipboard.getData("text/plain");
-    if (!looksLikeMarkdownPaste(rawText)) return;
-
-    event.preventDefault();
-    ref.current.insertMarkdown(normalizeMarkdown(rawText));
+  const handleNativeMarkdownPaste = useCallback((event: ClipboardEvent) => {
+    if (!ref.current) return;
+    const interceptedMarkdown = interceptMarkdownPasteEvent(event, {
+      insideCodeLike: isSelectionInsideCodeLikeElement(containerRef.current),
+    });
+    if (!interceptedMarkdown) return;
+    ref.current.insertMarkdown(normalizeMarkdown(interceptedMarkdown));
   }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onPasteCapture = (event: Event) => {
+      handleNativeMarkdownPaste(event as ClipboardEvent);
+    };
+
+    container.addEventListener("paste", onPasteCapture, true);
+    return () => {
+      container.removeEventListener("paste", onPasteCapture, true);
+    };
+  }, [handleNativeMarkdownPaste]);
 
   const mentionMenuPosition = mentionState
     ? computeMentionMenuPosition(mentionState, getMentionMenuViewport())
@@ -753,7 +762,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
         dragDepthRef.current = 0;
         setIsDragOver(false);
       }}
-      onPasteCapture={handlePasteCapture}
     >
       <MDXEditor
         ref={setEditorRef}

@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { looksLikeMarkdownPaste, normalizePastedMarkdown } from "./markdownPaste";
+import { describe, expect, it, vi } from "vitest";
+import {
+  extractMarkdownPaste,
+  interceptMarkdownPasteEvent,
+  looksLikeMarkdownPaste,
+  normalizePastedMarkdown,
+} from "./markdownPaste";
 
 describe("markdownPaste", () => {
   it("normalizes windows line endings", () => {
@@ -46,5 +51,51 @@ describe("markdownPaste", () => {
 
   it("leaves single-line plain text on the native paste path", () => {
     expect(looksLikeMarkdownPaste("just a sentence")).toBe(false);
+  });
+
+  it("extracts markdown paste and normalizes line endings", () => {
+    const clipboardData = {
+      types: ["text/plain"],
+      getData: (format: string) => format === "text/plain"
+        ? "```ts\r\nconst x = 1;\r\n```"
+        : "",
+    };
+
+    expect(extractMarkdownPaste(clipboardData)).toBe("```ts\nconst x = 1;\n```");
+  });
+
+  it("does not intercept markdown paste when html is present", () => {
+    const clipboardData = {
+      types: ["text/plain", "text/html"],
+      getData: (format: string) => format === "text/plain" ? "```ts\nconst x = 1;\n```" : "<pre>code</pre>",
+    };
+
+    expect(extractMarkdownPaste(clipboardData)).toBeNull();
+  });
+
+  it("does not intercept markdown paste inside code-like selections", () => {
+    const clipboardData = {
+      types: ["text/plain"],
+      getData: () => "```ts\nconst x = 1;\n```",
+    };
+
+    expect(extractMarkdownPaste(clipboardData, { insideCodeLike: true })).toBeNull();
+  });
+
+  it("stops the native paste event once markdown is intercepted", () => {
+    const event = {
+      clipboardData: {
+        types: ["text/plain"],
+        getData: () => "```ts\nconst x = 1;\n```",
+      },
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      stopImmediatePropagation: vi.fn(),
+    };
+
+    expect(interceptMarkdownPasteEvent(event)).toBe("```ts\nconst x = 1;\n```");
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
+    expect(event.stopImmediatePropagation).toHaveBeenCalledOnce();
   });
 });
