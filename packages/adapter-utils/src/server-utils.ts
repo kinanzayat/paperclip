@@ -1069,7 +1069,11 @@ export async function runChildProcess(
           const pathValue = mergedEnv.PATH ?? mergedEnv.Path ?? "";
           const msg =
             errno === "ENOENT"
-              ? `Failed to start command "${command}" in "${opts.cwd}". Verify adapter command, working directory, and PATH (${pathValue}).`
+              ? `Failed to start command "${command}" in "${opts.cwd}". ` +
+                `Verify that "${command}" is installed and available. ` +
+                `To fix on Windows: (1) Add the directory containing "${command}" to your PATH, ` +
+                `or (2) set explicitCommandPath in adapter config to the full path (e.g., "C:\\path\\to\\${command}.exe"). ` +
+                `Current PATH: ${pathValue}.`
               : `Failed to start command "${command}" in "${opts.cwd}": ${err.message}`;
           reject(new Error(msg));
         });

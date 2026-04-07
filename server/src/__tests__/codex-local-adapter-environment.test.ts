@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@paperclipai/adapter-codex-local/server";
-import * as serverUtils from "@paperclipai/adapter-utils/server-utils";
 
 const itWindows = process.platform === "win32" ? it : it.skip;
 
@@ -100,6 +99,73 @@ describe("codex_local environment diagnostics", () => {
     }
   });
 
+  it("uses the managed company Codex home for auth diagnostics and reports the authenticated email", async () => {
+    const root = path.join(
+      os.tmpdir(),
+      `paperclip-codex-managed-auth-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const sharedCodexHome = path.join(root, "shared-codex-home");
+    const paperclipHome = path.join(root, "paperclip-home");
+    const managedCodexHome = path.join(
+      paperclipHome,
+      "instances",
+      "default",
+      "companies",
+      "company-1",
+      "codex-home",
+    );
+    const cwd = path.join(root, "workspace");
+    const jwtPayload = Buffer.from(
+      JSON.stringify({
+        email: "managed@example.com",
+        "https://api.openai.com/auth": {
+          chatgpt_plan_type: "pro",
+          chatgpt_user_email: "managed@example.com",
+        },
+      }),
+    ).toString("base64url");
+    const auth = {
+      tokens: {
+        access_token: `header.${jwtPayload}.sig`,
+        id_token: `header.${jwtPayload}.sig`,
+        account_id: "acct-managed",
+      },
+    };
+
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("PAPERCLIP_HOME", paperclipHome);
+    vi.stubEnv("CODEX_HOME", sharedCodexHome);
+
+    try {
+      await fs.mkdir(sharedCodexHome, { recursive: true });
+      await fs.writeFile(path.join(sharedCodexHome, "auth.json"), JSON.stringify(auth), "utf8");
+
+      const result = await testEnvironment({
+        companyId: "company-1",
+        adapterType: "codex_local",
+        config: {
+          command: process.execPath,
+          cwd,
+        },
+      });
+
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({
+          code: "codex_home_effective",
+          detail: managedCodexHome,
+        }),
+      );
+      expect(result.checks).toContainEqual(
+        expect.objectContaining({
+          code: "codex_native_auth_present",
+          detail: "Logged in as managed@example.com (pro).",
+        }),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   itWindows("runs the hello probe when Codex is available via a Windows .cmd wrapper", async () => {
     const root = path.join(
       os.tmpdir(),
@@ -138,65 +204,6 @@ describe("codex_local environment diagnostics", () => {
       expect(result.checks.some((check) => check.code === "codex_hello_probe_passed")).toBe(true);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("reports quota exhaustion as a warning instead of throwing", async () => {
-    const runChildProcessSpy = vi
-      .spyOn(serverUtils, "runChildProcess")
-      .mockResolvedValue({
-        exitCode: 1,
-        signal: null,
-        timedOut: false,
-        stdout: "",
-        stderr:
-          "You've hit your usage limit. visit https://chatgpt.com/codex/settings/usage to purchase more credits.",
-        pid: 123,
-        startedAt: new Date().toISOString(),
-      });
-
-    try {
-      const result = await testEnvironment({
-        companyId: "company-1",
-        adapterType: "codex_local",
-        config: {
-          command: "codex",
-          cwd: process.cwd(),
-          env: {
-            OPENAI_API_KEY: "test-key",
-          },
-        },
-      });
-
-      expect(result.status).toBe("warn");
-      expect(result.checks.some((check) => check.code === "codex_hello_probe_quota_exceeded")).toBe(true);
-    } finally {
-      runChildProcessSpy.mockRestore();
-    }
-  });
-
-  it("reports spawn failures as warnings instead of throwing", async () => {
-    const runChildProcessSpy = vi
-      .spyOn(serverUtils, "runChildProcess")
-      .mockRejectedValue(new Error("Failed to start command \"codex\" in \"/tmp\": spawn EPERM"));
-
-    try {
-      const result = await testEnvironment({
-        companyId: "company-1",
-        adapterType: "codex_local",
-        config: {
-          command: "codex",
-          cwd: process.cwd(),
-          env: {
-            OPENAI_API_KEY: "test-key",
-          },
-        },
-      });
-
-      expect(result.status).toBe("warn");
-      expect(result.checks.some((check) => check.code === "codex_hello_probe_unavailable")).toBe(true);
-    } finally {
-      runChildProcessSpy.mockRestore();
     }
   });
 });

@@ -8,6 +8,13 @@ import { useCompany } from "../context/CompanyContext";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, projectWorkspaceUrl } from "../lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Check, Copy, GitBranch, FolderOpen, Pencil, X } from "lucide-react";
 
 /* -------------------------------------------------------------------------- */
@@ -423,11 +430,9 @@ export function IssueWorkspaceCard({
       {/* Editing controls */}
       {showEditingControls && (
         <div className="space-y-2 pt-1">
-          <select
-            className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-xs outline-none"
+          <Select
             value={draftSelection}
-            onChange={(e) => {
-              const nextMode = e.target.value;
+            onValueChange={(nextMode) => {
               setDraftSelection(nextMode);
               if (nextMode !== "reuse_existing") {
                 setDraftExecutionWorkspaceId("");
@@ -436,52 +441,58 @@ export function IssueWorkspaceCard({
               }
             }}
           >
-            {EXECUTION_WORKSPACE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.value === "reuse_existing" && configuredReusableWorkspace?.mode === "isolated_workspace"
-                  ? "Existing isolated workspace"
-                  : option.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="w-full h-7 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {EXECUTION_WORKSPACE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.value === "reuse_existing" && configuredReusableWorkspace?.mode === "isolated_workspace"
+                    ? "Existing isolated workspace"
+                    : option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           {draftSelection === "reuse_existing" && (
-            <select
-              className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-xs outline-none"
+            <Select
               value={draftExecutionWorkspaceId}
-              onChange={(e) => {
-                setDraftExecutionWorkspaceId(e.target.value);
-              }}
+              onValueChange={(value) => setDraftExecutionWorkspaceId(value)}
             >
-              <option value="">Choose an existing workspace</option>
-              {deduplicatedReusableWorkspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name} · {w.status} · {w.branchName ?? w.cwd ?? w.id.slice(0, 8)}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full h-7 text-xs">
+                <SelectValue placeholder="Choose an existing workspace" />
+              </SelectTrigger>
+              <SelectContent>
+                {deduplicatedReusableWorkspaces.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name} · {w.status} · {w.branchName ?? w.cwd ?? w.id.slice(0, 8)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
+        </div>
+      )}
 
-          {/* Current workspace summary when editing */}
-          {workspace && (
-            <div className="text-[11px] text-muted-foreground space-y-0.5 pt-1 border-t border-border/50">
-              <div style={{ overflowWrap: "anywhere" }}>
-                Current:{" "}
-                {currentWorkspaceLink ? (
-                  <Link
-                    to={currentWorkspaceLink}
-                    className="hover:text-foreground hover:underline"
-                  >
-                    <BreakablePath text={workspace.name} />
-                  </Link>
-                ) : (
-                  <BreakablePath text={workspace.name} />
-                )}
-                {" · "}
-                {workspace.status}
-              </div>
-            </div>
-          )}
+      {/* Current workspace summary when editing */}
+      {workspace && (
+        <div className="text-[11px] text-muted-foreground space-y-0.5 pt-1 border-t border-border/50">
+          <div style={{ overflowWrap: "anywhere" }}>
+            Current:{" "}
+            {currentWorkspaceLink ? (
+              <Link
+                to={currentWorkspaceLink}
+                className="hover:text-foreground hover:underline"
+              >
+                <BreakablePath text={workspace.name} />
+              </Link>
+            ) : (
+              <BreakablePath text={workspace.name} />
+            )}
+            {" · "}
+            {workspace.status}
+          </div>
         </div>
       )}
     </div>

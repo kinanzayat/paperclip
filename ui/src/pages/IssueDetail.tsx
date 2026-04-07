@@ -13,7 +13,6 @@ import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
 import { usePanel } from "../context/PanelContext";
 import { useToast } from "../context/ToastContext";
-import { useDialog } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
@@ -67,10 +66,10 @@ import {
   EyeOff,
   Hexagon,
   ListTree,
+  Mail,
   MessageSquare,
   MoreHorizontal,
   Paperclip,
-  Plus,
   Repeat,
   SlidersHorizontal,
   Trash2,
@@ -94,6 +93,20 @@ type IssueDetailComment = (IssueComment | OptimisticIssueComment) & {
   interruptedRunId?: string | null;
   queueState?: "queued";
   queueTargetRunId?: string | null;
+};
+
+type AgentmailIssueMeta = {
+  messageId: string;
+  subject: string | null;
+  senderEmail: string | null;
+  routedProjectName: string | null;
+  projectReference: string | null;
+  outboundStatus: string | null;
+  summary: string | null;
+  requirementItems: string[];
+  createdSubIssueTitles: string[];
+  updatedSubIssueTitles: string[];
+  createdAt: Date;
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -131,6 +144,17 @@ function humanizeValue(value: unknown): string {
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => asNonEmptyString(entry)).filter((entry): entry is string => Boolean(entry));
 }
 
 function usageNumber(usage: Record<string, unknown> | null, ...keys: string[]) {
@@ -312,21 +336,6 @@ function memberMentionSearchText(member: CompanyMembership, currentUserId: strin
   ]
     .filter(Boolean)
     .join(" ");
-}
-
-function SubIssueCreateButton({ parentIssueId }: { parentIssueId?: string }) {
-  const { openNewIssue } = useDialog();
-  return (
-    <Button
-      size="sm"
-      variant="outline"
-      onClick={() => openNewIssue({ parentId: parentIssueId })}
-      className="gap-1.5"
-    >
-      <Plus className="w-4 h-4" />
-      New sub-issue
-    </Button>
-  );
 }
 
 export function IssueDetail() {
@@ -648,6 +657,32 @@ export function IssueDetail() {
     () => extractIssueTimelineEvents(activity),
     [activity],
   );
+
+  const agentmailMeta = useMemo<AgentmailIssueMeta | null>(() => {
+    if (!activity || activity.length === 0) return null;
+    const matched = activity
+      .filter((evt) => evt.action === "agentmail.webhook_processed")
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    if (!matched) return null;
+
+    const details = asRecord(matched.details);
+    const messageId = asNonEmptyString(details?.messageId);
+    if (!messageId) return null;
+
+    return {
+      messageId,
+      subject: asNonEmptyString(details?.subject),
+      senderEmail: asNonEmptyString(details?.senderEmail),
+      routedProjectName: asNonEmptyString(details?.routedProjectName),
+      projectReference: asNonEmptyString(details?.projectReference),
+      outboundStatus: asNonEmptyString(details?.outboundStatus),
+      summary: asNonEmptyString(details?.summary),
+      requirementItems: asStringArray(details?.requirementItems),
+      createdSubIssueTitles: asStringArray(details?.createdSubIssueTitles),
+      updatedSubIssueTitles: asStringArray(details?.updatedSubIssueTitles),
+      createdAt: matched.createdAt,
+    };
+  }, [activity]);
 
   const issueCostSummary = useMemo(() => {
     let input = 0;
@@ -1581,6 +1616,71 @@ export function IssueDetail() {
         onUpdate={(data) => updateIssue.mutate(data)}
       />
 
+      {agentmailMeta && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+            <Mail className="h-3.5 w-3.5" />
+            Email Intake
+          </div>
+          <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+            <div>
+              Source: <span className="text-foreground">{agentmailMeta.senderEmail ?? "unknown"}</span>
+            </div>
+            <div>
+              Message: <span className="font-mono text-foreground">{agentmailMeta.messageId}</span>
+            </div>
+            <div className="sm:col-span-2">
+              Subject: <span className="text-foreground">{agentmailMeta.subject ?? "(no subject)"}</span>
+            </div>
+            <div>
+              Routed project: <span className="text-foreground">{agentmailMeta.routedProjectName ?? "Company backlog"}</span>
+            </div>
+            <div>
+              Outbound summary: <span className="text-foreground">{agentmailMeta.outboundStatus ?? "unknown"}</span>
+            </div>
+            <div className="sm:col-span-2">
+              Processed {relativeTime(agentmailMeta.createdAt)}
+              {agentmailMeta.projectReference ? ` (requested: ${agentmailMeta.projectReference})` : ""}
+            </div>
+            {agentmailMeta.summary && (
+              <div className="sm:col-span-2">
+                Requirement summary: <span className="text-foreground">{agentmailMeta.summary}</span>
+              </div>
+            )}
+            {agentmailMeta.requirementItems.length > 0 && (
+              <div className="sm:col-span-2">
+                Requirement items:
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-foreground">
+                  {agentmailMeta.requirementItems.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {agentmailMeta.createdSubIssueTitles.length > 0 && (
+              <div className="sm:col-span-2">
+                Created sub-issues:
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-foreground">
+                  {agentmailMeta.createdSubIssueTitles.map((title) => (
+                    <li key={title}>{title}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {agentmailMeta.updatedSubIssueTitles.length > 0 && (
+              <div className="sm:col-span-2">
+                Updated sub-issues:
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-foreground">
+                  {agentmailMeta.updatedSubIssueTitles.map((title) => (
+                    <li key={title}>{title}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <Separator />
 
       <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
@@ -1659,40 +1759,35 @@ export function IssueDetail() {
         </TabsContent>
 
         <TabsContent value="subissues">
-          <div className="space-y-3">
-            <div className="flex justify-end">
-              <SubIssueCreateButton parentIssueId={issue.id} />
+          {childIssues.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No sub-issues.</p>
+          ) : (
+            <div className="border border-border rounded-lg divide-y divide-border">
+              {childIssues.map((child) => (
+                <Link
+                  key={child.id}
+                  to={createIssueDetailPath(child.identifier ?? child.id, location.state, location.search)}
+                  state={location.state}
+                  className="flex items-center justify-between px-3 py-2 text-sm hover:bg-accent/20 transition-colors"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <StatusIcon status={child.status} />
+                    <PriorityIcon priority={child.priority} />
+                    <span className="font-mono text-muted-foreground shrink-0">
+                      {child.identifier ?? child.id.slice(0, 8)}
+                    </span>
+                    <span className="truncate">{child.title}</span>
+                  </div>
+                  {child.assigneeAgentId && (() => {
+                    const name = agentMap.get(child.assigneeAgentId)?.name;
+                    return name
+                      ? <Identity name={name} size="sm" />
+                      : <span className="text-muted-foreground font-mono">{child.assigneeAgentId.slice(0, 8)}</span>;
+                  })()}
+                </Link>
+              ))}
             </div>
-            {childIssues.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No sub-issues.</p>
-            ) : (
-              <div className="border border-border rounded-lg divide-y divide-border">
-                {childIssues.map((child) => (
-                  <Link
-                    key={child.id}
-                    to={createIssueDetailPath(child.identifier ?? child.id, location.state, location.search)}
-                    state={location.state}
-                    className="flex items-center justify-between px-3 py-2 text-sm hover:bg-accent/20 transition-colors"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <StatusIcon status={child.status} />
-                      <PriorityIcon priority={child.priority} />
-                      <span className="font-mono text-muted-foreground shrink-0">
-                        {child.identifier ?? child.id.slice(0, 8)}
-                      </span>
-                      <span className="truncate">{child.title}</span>
-                    </div>
-                    {child.assigneeAgentId && (() => {
-                      const name = agentMap.get(child.assigneeAgentId)?.name;
-                      return name
-                        ? <Identity name={name} size="sm" />
-                        : <span className="text-muted-foreground font-mono">{child.assigneeAgentId.slice(0, 8)}</span>;
-                    })()}
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
+          )}
         </TabsContent>
 
         <TabsContent value="activity">

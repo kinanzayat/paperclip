@@ -30,6 +30,13 @@ import {
   Package,
   Upload,
 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Field, adapterLabels } from "../components/agent-config-primitives";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { defaultCreateValues } from "../components/agent-config-defaults";
@@ -573,17 +580,21 @@ function AdapterPickerList({
                     {agent.name}
                   </span>
                   <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  <select
-                    className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 py-1 text-xs outline-none focus:border-foreground"
+                  <Select
                     value={selectedType}
-                    onChange={(e) => onChangeAdapter(agent.slug, e.target.value)}
+                    onValueChange={(value) => onChangeAdapter(agent.slug, value)}
                   >
-                    {IMPORT_ADAPTER_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="min-w-0 flex-1 h-7 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {IMPORT_ADAPTER_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <button
                     type="button"
                     className={cn(
@@ -1179,19 +1190,23 @@ export function CompanyImport() {
         )}
 
         <Field label="Target" hint="Import into this company or create a new one.">
-          <select
-            className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+          <Select
             value={targetMode}
-            onChange={(e) => {
-              setTargetMode(e.target.value as "existing" | "new");
+            onValueChange={(value) => {
+              setTargetMode(value as "existing" | "new");
               setImportPreview(null);
             }}
           >
-            <option value="new">Create new company</option>
-            <option value="existing">
-              Existing company: {selectedCompany?.name}
-            </option>
-          </select>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="new">Create new company</SelectItem>
+              <SelectItem value="existing">
+                Existing company: {selectedCompany?.name}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </Field>
 
         {targetMode === "new" && (
@@ -1213,18 +1228,22 @@ export function CompanyImport() {
           label="Collision strategy"
           hint="Board imports can rename, skip, or replace matching company content."
         >
-          <select
-            className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+          <Select
             value={collisionStrategy}
-            onChange={(e) => {
-              setCollisionStrategy(e.target.value as CompanyPortabilityCollisionStrategy);
+            onValueChange={(value) => {
+              setCollisionStrategy(value as CompanyPortabilityCollisionStrategy);
               setImportPreview(null);
             }}
           >
-            <option value="rename">Rename on conflict</option>
-            <option value="skip">Skip on conflict</option>
-            <option value="replace">Replace existing</option>
-          </select>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="rename">Rename on conflict</SelectItem>
+              <SelectItem value="skip">Skip on conflict</SelectItem>
+              <SelectItem value="replace">Replace existing</SelectItem>
+            </SelectContent>
+          </Select>
         </Field>
 
         <div className="flex items-center gap-2">

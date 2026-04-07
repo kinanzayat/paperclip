@@ -117,21 +117,6 @@ function firstNonEmptyLine(value: string | null | undefined): string | null {
   return line ?? null;
 }
 
-function joinRequestRequesterName(joinRequest: JoinRequest): string | null {
-  if (joinRequest.requestType !== "human") return null;
-  return joinRequest.requestingUser?.name?.trim()
-    || joinRequest.requestingUser?.email?.trim()
-    || joinRequest.requestEmailSnapshot?.trim()
-    || null;
-}
-
-function joinRequestRequesterEmail(joinRequest: JoinRequest): string | null {
-  if (joinRequest.requestType !== "human") return null;
-  return joinRequest.requestingUser?.email?.trim()
-    || joinRequest.requestEmailSnapshot?.trim()
-    || null;
-}
-
 function runFailureMessage(run: HeartbeatRun): string {
   return firstNonEmptyLine(run.error) ?? firstNonEmptyLine(run.stderrExcerpt) ?? "Run exited with an error.";
 }
@@ -695,11 +680,9 @@ function JoinRequestInboxRow({
   selected?: boolean;
   className?: string;
 }) {
-  const requesterName = joinRequestRequesterName(joinRequest);
-  const requesterEmail = joinRequestRequesterEmail(joinRequest);
   const label =
     joinRequest.requestType === "human"
-      ? requesterName ?? "Human join request"
+      ? "Human join request"
       : `Agent join request${joinRequest.agentName ? `: ${joinRequest.agentName}` : ""}`;
   const showUnreadSlot = unreadState !== null;
   const showUnreadDot = unreadState === "visible" || unreadState === "fading";
@@ -754,15 +737,6 @@ function JoinRequestInboxRow({
               {label}
             </span>
             <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              {joinRequest.requestType === "human" && requesterEmail ? (
-                <span>{requesterEmail}</span>
-              ) : null}
-              {joinRequest.requestType === "human" && requesterName && requesterEmail ? (
-                <span>·</span>
-              ) : null}
-              {joinRequest.requestType === "human" && requesterName && requesterName !== requesterEmail ? (
-                <span>{requesterName}</span>
-              ) : null}
               <span>requested {timeAgo(joinRequest.createdAt)} from IP {joinRequest.requestIp}</span>
               {joinRequest.adapterType && <span>adapter: {joinRequest.adapterType}</span>}
             </span>

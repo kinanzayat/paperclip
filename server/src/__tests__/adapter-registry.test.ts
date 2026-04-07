@@ -1,4 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ServerAdapterModule } from "../adapters/index.js";
 import {
   detectAdapterModel,
@@ -139,5 +142,26 @@ describe("server adapter registry", () => {
     expect(await listAdapterModels("claude_local")).toEqual(builtIn?.models ?? []);
     expect(await detectAdapterModel("claude_local")).toBeNull();
     expect(detectModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("detects the shared Codex default model for the builtin codex adapter", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-registry-codex-"));
+    const sharedCodexHome = path.join(root, ".codex");
+    const previousCodexHome = process.env.CODEX_HOME;
+    try {
+      await fs.mkdir(sharedCodexHome, { recursive: true });
+      await fs.writeFile(path.join(sharedCodexHome, "config.toml"), 'model = "gpt-5.4"\n', "utf8");
+      process.env.CODEX_HOME = sharedCodexHome;
+
+      await expect(detectAdapterModel("codex_local")).resolves.toEqual({
+        model: "gpt-5.4",
+        provider: "openai",
+        source: path.join(sharedCodexHome, "config.toml"),
+      });
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

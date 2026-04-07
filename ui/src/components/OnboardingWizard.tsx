@@ -35,7 +35,6 @@ import {
 } from "../lib/onboarding-launch";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
-  DEFAULT_CODEX_LOCAL_MODEL
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
@@ -315,10 +314,8 @@ export function OnboardingWizard() {
       ...defaultCreateValues,
       adapterType,
       model:
-        adapterType === "codex_local"
-          ? model || DEFAULT_CODEX_LOCAL_MODEL
-          : adapterType === "gemini_local"
-            ? model || DEFAULT_GEMINI_LOCAL_MODEL
+        adapterType === "gemini_local"
+          ? model || DEFAULT_GEMINI_LOCAL_MODEL
           : adapterType === "cursor"
           ? model || DEFAULT_CURSOR_LOCAL_MODEL
           : model,
@@ -766,12 +763,11 @@ export function OnboardingWizard() {
                           onClick={() => {
                             const nextType = opt.type;
                             setAdapterType(nextType);
-                            if (nextType === "codex_local" && !model) {
-                              setModel(DEFAULT_CODEX_LOCAL_MODEL);
-                            }
-                            if (nextType !== "codex_local") {
+                            if (nextType === "codex_local") {
                               setModel("");
+                              return;
                             }
+                            setModel("");
                           }}
                         >
                           {opt.recommended && (
@@ -819,11 +815,11 @@ export function OnboardingWizard() {
                                if (opt.comingSoon) return;
                                const nextType = opt.type;
                               setAdapterType(nextType);
-                              if (nextType === "gemini_local" && !model) {
-                                setModel(DEFAULT_GEMINI_LOCAL_MODEL);
-                                return;
-                              }
-                              if (nextType === "cursor" && !model) {
+                             if (nextType === "gemini_local" && !model) {
+                               setModel(DEFAULT_GEMINI_LOCAL_MODEL);
+                               return;
+                             }
+                             if (nextType === "cursor" && !model) {
                                 setModel(DEFAULT_CURSOR_LOCAL_MODEL);
                                 return;
                               }

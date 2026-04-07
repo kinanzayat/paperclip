@@ -411,6 +411,26 @@ export function Costs() {
     return map;
   }, [quotaData]);
 
+  const quotaAccountEmailsByProvider = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const result of quotaData ?? []) {
+      if (typeof result.accountEmail === "string" && result.accountEmail.length > 0) {
+        map.set(result.provider, result.accountEmail);
+      }
+    }
+    return map;
+  }, [quotaData]);
+
+  const quotaPlanTypesByProvider = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const result of quotaData ?? []) {
+      if (typeof result.planType === "string" && result.planType.length > 0) {
+        map.set(result.provider, result.planType);
+      }
+    }
+    return map;
+  }, [quotaData]);
+
   const deficitNotchByProvider = useMemo(() => {
     const map = new Map<string, boolean>();
     if (preset !== "mtd") return map;
@@ -974,6 +994,8 @@ export function Costs() {
                           quotaWindows={quotaWindowsByProvider.get(provider) ?? []}
                           quotaError={quotaErrorsByProvider.get(provider) ?? null}
                           quotaSource={quotaSourcesByProvider.get(provider) ?? null}
+                          quotaAccountEmail={quotaAccountEmailsByProvider.get(provider) ?? null}
+                          quotaPlanType={quotaPlanTypesByProvider.get(provider) ?? null}
                           quotaLoading={quotaLoading}
                         />
                       ))}
@@ -994,6 +1016,8 @@ export function Costs() {
                       quotaWindows={quotaWindowsByProvider.get(provider) ?? []}
                       quotaError={quotaErrorsByProvider.get(provider) ?? null}
                       quotaSource={quotaSourcesByProvider.get(provider) ?? null}
+                      quotaAccountEmail={quotaAccountEmailsByProvider.get(provider) ?? null}
+                      quotaPlanType={quotaPlanTypesByProvider.get(provider) ?? null}
                       quotaLoading={quotaLoading}
                     />
                   </TabsContent>

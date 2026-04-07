@@ -24,6 +24,11 @@ function isRunActive(status: string): boolean {
   return status === "queued" || status === "running";
 }
 
+function resolveRefetchMs(runs: LiveRunForIssue[] | undefined): number {
+  if (!runs || runs.length === 0) return 5000;
+  return runs.some((run) => isRunActive(run.status)) ? 1200 : 5000;
+}
+
 export function LiveRunWidget({ issueId, companyId }: LiveRunWidgetProps) {
   const queryClient = useQueryClient();
   const [cancellingRunIds, setCancellingRunIds] = useState(new Set<string>());
@@ -32,14 +37,18 @@ export function LiveRunWidget({ issueId, companyId }: LiveRunWidgetProps) {
     queryKey: queryKeys.issues.liveRuns(issueId),
     queryFn: () => heartbeatsApi.liveRunsForIssue(issueId),
     enabled: !!issueId,
-    refetchInterval: 3000,
+    refetchInterval: (query) => resolveRefetchMs(query.state.data),
   });
 
   const { data: activeRun } = useQuery({
     queryKey: queryKeys.issues.activeRun(issueId),
     queryFn: () => heartbeatsApi.activeRunForIssue(issueId),
     enabled: !!issueId,
-    refetchInterval: 3000,
+    refetchInterval: (query) => {
+      const run = query.state.data;
+      if (!run) return 5000;
+      return isRunActive(run.status) ? 1200 : 5000;
+    },
   });
 
   const runs = useMemo(() => {

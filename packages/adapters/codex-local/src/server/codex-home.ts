@@ -1,11 +1,17 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
+import { DEFAULT_CODEX_LOCAL_MODEL } from "../index.js";
 
 const TRUTHY_ENV_RE = /^(1|true|yes|on)$/i;
-const COPIED_SHARED_FILES = ["config.json", "config.toml", "instructions.md"] as const;
-const SYMLINKED_SHARED_FILES = ["auth.json"] as const;
+const SYNCHRONIZED_SHARED_FILES = [
+  "auth.json",
+  "config.json",
+  "config.toml",
+  "instructions.md",
+] as const;
 const DEFAULT_PAPERCLIP_INSTANCE_ID = "default";
 
 function nonEmpty(value: string | undefined): string | null {
@@ -35,7 +41,8 @@ export function resolveManagedCodexHomeDir(
   env: NodeJS.ProcessEnv,
   companyId?: string,
 ): string {
-  const paperclipHome = nonEmpty(env.PAPERCLIP_HOME) ?? path.resolve(os.homedir(), ".paperclip");
+  const paperclipHome =
+    nonEmpty(env.PAPERCLIP_HOME) ?? path.resolve(resolveUserHome(env), ".paperclip");
   const instanceId = nonEmpty(env.PAPERCLIP_INSTANCE_ID) ?? DEFAULT_PAPERCLIP_INSTANCE_ID;
   return companyId
     ? path.resolve(paperclipHome, "instances", instanceId, "companies", companyId, "codex-home")
@@ -46,58 +53,93 @@ async function ensureParentDir(target: string): Promise<void> {
   await fs.mkdir(path.dirname(target), { recursive: true });
 }
 
-async function createLinkCrossPlatform(source: string, target: string): Promise<void> {
-  const sourceStats = await fs.stat(source);
-  const isDirectory = sourceStats.isDirectory();
+function buffersEqual(left: Buffer, right: Buffer): boolean {
+  return left.length === right.length && Buffer.compare(left, right) === 0;
+}
 
+async function replaceFileAtomically(target: string, contents: Buffer): Promise<void> {
+  await ensureParentDir(target);
+  const tempPath = `${target}.paperclip-sync-${process.pid}-${randomUUID()}.tmp`;
+  await fs.writeFile(tempPath, contents);
   try {
-    await fs.symlink(source, target, isDirectory && process.platform === "win32" ? "junction" : undefined);
-    return;
+    await fs.rename(tempPath, target);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EACCES")) {
+    if (code !== "EEXIST" && code !== "EPERM" && code !== "ENOTEMPTY") {
       throw err;
+    }
+    await fs.rm(target, { recursive: true, force: true });
+    await fs.rename(tempPath, target);
+  } finally {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+  }
+}
+
+async function ensureSynchronizedFile(target: string, source: string): Promise<void> {
+  const sourceContents = await fs.readFile(source);
+  const existing = await fs.lstat(target).catch(() => null);
+
+  if (existing?.isFile()) {
+    const targetContents = await fs.readFile(target).catch(() => null);
+    if (targetContents && buffersEqual(targetContents, sourceContents)) {
+      return;
     }
   }
 
-  if (isDirectory) {
-    throw new Error(`Could not link directory "${source}" to "${target}" on Windows.`);
-  }
+  await replaceFileAtomically(target, sourceContents);
+}
 
+function parseTomlStringLiteral(value: string): string | null {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(['"])(.*?)\1(?:\s+#.*)?$/);
+  if (!match) return null;
+  return match[2] ?? null;
+}
+
+export async function readSharedCodexDefaultModel(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  const configPath = path.join(resolveSharedCodexHomeDir(env), "config.toml");
+  let raw: string;
   try {
-    await fs.link(source, target);
+    raw = await fs.readFile(configPath, "utf8");
   } catch {
-    await fs.copyFile(source, target);
+    return null;
   }
+
+  let inSection = false;
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (trimmed.startsWith("[")) {
+      inSection = true;
+      continue;
+    }
+    if (inSection) continue;
+    const match = trimmed.match(/^model\s*=\s*(.+)$/);
+    if (!match) continue;
+    return parseTomlStringLiteral(match[1] ?? "");
+  }
+
+  return null;
 }
 
-async function ensureSymlink(target: string, source: string): Promise<void> {
-  const existing = await fs.lstat(target).catch(() => null);
-  if (!existing) {
-    await ensureParentDir(target);
-    await createLinkCrossPlatform(source, target);
-    return;
+export async function detectCodexModel(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ model: string; provider: string; source: string }> {
+  const detected = await readSharedCodexDefaultModel(env);
+  if (detected) {
+    return {
+      model: detected,
+      provider: "openai",
+      source: path.join(resolveSharedCodexHomeDir(env), "config.toml"),
+    };
   }
-
-  if (!existing.isSymbolicLink()) {
-    return;
-  }
-
-  const linkedPath = await fs.readlink(target).catch(() => null);
-  if (!linkedPath) return;
-
-  const resolvedLinkedPath = path.resolve(path.dirname(target), linkedPath);
-  if (resolvedLinkedPath === source) return;
-
-  await fs.unlink(target);
-  await createLinkCrossPlatform(source, target);
-}
-
-async function ensureCopiedFile(target: string, source: string): Promise<void> {
-  const existing = await fs.lstat(target).catch(() => null);
-  if (existing) return;
-  await ensureParentDir(target);
-  await fs.copyFile(source, target);
+  return {
+    model: DEFAULT_CODEX_LOCAL_MODEL,
+    provider: "openai",
+    source: "paperclip_default",
+  };
 }
 
 export async function prepareManagedCodexHome(
@@ -112,21 +154,15 @@ export async function prepareManagedCodexHome(
 
   await fs.mkdir(targetHome, { recursive: true });
 
-  for (const name of SYMLINKED_SHARED_FILES) {
+  for (const name of SYNCHRONIZED_SHARED_FILES) {
     const source = path.join(sourceHome, name);
     if (!(await pathExists(source))) continue;
-    await ensureSymlink(path.join(targetHome, name), source);
-  }
-
-  for (const name of COPIED_SHARED_FILES) {
-    const source = path.join(sourceHome, name);
-    if (!(await pathExists(source))) continue;
-    await ensureCopiedFile(path.join(targetHome, name), source);
+    await ensureSynchronizedFile(path.join(targetHome, name), source);
   }
 
   await onLog(
     "stdout",
-    `[paperclip] Using ${isWorktreeMode(env) ? "worktree-isolated" : "Paperclip-managed"} Codex home "${targetHome}" (seeded from "${sourceHome}").\n`,
+    `[paperclip] Using ${isWorktreeMode(env) ? "worktree-isolated" : "Paperclip-managed"} Codex home "${targetHome}" (synced from "${sourceHome}").\n`,
   );
   return targetHome;
 }

@@ -215,7 +215,7 @@ export function costRoutes(db: Db) {
       res.status(404).json({ error: "Company not found" });
       return;
     }
-    const results = await fetchAllQuotaWindows();
+    const results = await fetchAllQuotaWindows(companyId);
     res.json(results);
   });
 

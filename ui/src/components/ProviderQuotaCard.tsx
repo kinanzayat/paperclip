@@ -32,6 +32,8 @@ interface ProviderQuotaCardProps {
   quotaWindows?: QuotaWindow[];
   quotaError?: string | null;
   quotaSource?: string | null;
+  quotaAccountEmail?: string | null;
+  quotaPlanType?: string | null;
   quotaLoading?: boolean;
 }
 
@@ -46,6 +48,8 @@ export function ProviderQuotaCard({
   quotaWindows = [],
   quotaError = null,
   quotaSource = null,
+  quotaAccountEmail = null,
+  quotaPlanType = null,
   quotaLoading = false,
 }: ProviderQuotaCardProps) {
   // single-pass aggregation over rows — memoized so the 8 derived values are not
@@ -324,7 +328,13 @@ export function ProviderQuotaCard({
               ) : isClaudeQuotaPanel ? (
                 <ClaudeSubscriptionPanel windows={quotaWindows} source={quotaSource} error={quotaError} />
               ) : isCodexQuotaPanel ? (
-                <CodexSubscriptionPanel windows={quotaWindows} source={quotaSource} error={quotaError} />
+                <CodexSubscriptionPanel
+                  windows={quotaWindows}
+                  source={quotaSource}
+                  error={quotaError}
+                  accountEmail={quotaAccountEmail}
+                  planType={quotaPlanType}
+                />
               ) : (
                 <>
                   {quotaError ? (
@@ -332,6 +342,20 @@ export function ProviderQuotaCard({
                       {quotaError}
                     </p>
                   ) : null}
+                  {(quotaAccountEmail || quotaPlanType) && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      {quotaAccountEmail ? (
+                        <span className="border border-border px-2 py-1 font-mono text-foreground">
+                          {quotaAccountEmail}
+                        </span>
+                      ) : null}
+                      {quotaPlanType ? (
+                        <span className="border border-border px-2 py-1 uppercase tracking-[0.14em]">
+                          {quotaPlanType}
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
                   <div className="space-y-2.5">
                     {quotaWindows.map((qw) => {
                       const fillColor =

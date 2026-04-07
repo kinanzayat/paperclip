@@ -32,12 +32,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  Maximize2,
-  Minimize2,
-  MoreHorizontal,
-  ChevronRight,
-  ChevronDown,
-  CircleDot,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Minus,
   ArrowUp,
   ArrowDown,
@@ -48,6 +49,12 @@ import {
   FileText,
   Loader2,
   X,
+  Minimize2,
+  Maximize2,
+  ChevronDown,
+  ChevronRight,
+  CircleDot,
+  MoreHorizontal,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { extractProviderIdWithFallback } from "../lib/model-utils";
@@ -283,7 +290,6 @@ export function NewIssueDialog() {
   const [selectedExecutionWorkspaceId, setSelectedExecutionWorkspaceId] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [dialogCompanyId, setDialogCompanyId] = useState<string | null>(null);
-  const [parentId, setParentId] = useState<string | undefined>();
   const [stagedFiles, setStagedFiles] = useState<StagedIssueFile[]>([]);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -514,7 +520,6 @@ export function NewIssueDialog() {
       setDescription(newIssueDefaults.description ?? "");
       setStatus(newIssueDefaults.status ?? defaultStatusSlug);
       setPriority(newIssueDefaults.priority ?? "");
-      setParentId(newIssueDefaults.parentId);
       const defaultProjectId = newIssueDefaults.projectId ?? "";
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
       setProjectId(defaultProjectId);
@@ -533,7 +538,6 @@ export function NewIssueDialog() {
       setDescription(draft.description);
       setStatus(draft.status || defaultStatusSlug);
       setPriority(draft.priority);
-      setParentId(newIssueDefaults.parentId);
       setAssigneeValue(
         newIssueDefaults.assigneeAgentId || newIssueDefaults.assigneeUserId
           ? assigneeValueFromSelection(newIssueDefaults)
@@ -555,7 +559,6 @@ export function NewIssueDialog() {
       const defaultProject = orderedProjects.find((project) => project.id === defaultProjectId);
       setStatus(newIssueDefaults.status ?? defaultStatusSlug);
       setPriority(newIssueDefaults.priority ?? "");
-      setParentId(newIssueDefaults.parentId);
       setProjectId(defaultProjectId);
       setProjectWorkspaceId(defaultProjectWorkspaceIdForProject(defaultProject));
       setAssigneeValue(assigneeValueFromSelection(newIssueDefaults));
@@ -677,7 +680,6 @@ export function NewIssueDialog() {
       ...(selectedAssigneeUserId ? { assigneeUserId: selectedAssigneeUserId } : {}),
       ...(projectId ? { projectId } : {}),
       ...(projectWorkspaceId ? { projectWorkspaceId } : {}),
-      ...(parentId ? { parentId } : {}),
       ...(assigneeAdapterOverrides ? { assigneeAdapterOverrides } : {}),
       ...(executionWorkspacePolicy?.enabled ? { executionWorkspacePreference: executionWorkspaceMode } : {}),
       ...(executionWorkspaceMode === "reuse_existing" && selectedExecutionWorkspaceId
@@ -1151,35 +1153,42 @@ export function NewIssueDialog() {
               <div className="text-[11px] text-muted-foreground">
                 Control whether this issue runs in the shared workspace, a new isolated workspace, or an existing one.
               </div>
-              <select
-                className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-xs outline-none"
+              <Select
                 value={executionWorkspaceMode}
-                onChange={(e) => {
-                  setExecutionWorkspaceMode(e.target.value);
-                  if (e.target.value !== "reuse_existing") {
+                onValueChange={(value) => {
+                  setExecutionWorkspaceMode(value);
+                  if (value !== "reuse_existing") {
                     setSelectedExecutionWorkspaceId("");
                   }
                 }}
               >
-                {EXECUTION_WORKSPACE_MODES.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {executionWorkspaceMode === "reuse_existing" && (
-                <select
-                  className="w-full rounded border border-border bg-transparent px-2 py-1.5 text-xs outline-none"
-                  value={selectedExecutionWorkspaceId}
-                  onChange={(e) => setSelectedExecutionWorkspaceId(e.target.value)}
-                >
-                  <option value="">Choose an existing workspace</option>
-                  {deduplicatedReusableWorkspaces.map((workspace) => (
-                    <option key={workspace.id} value={workspace.id}>
-                      {workspace.name} · {workspace.status} · {workspace.branchName ?? workspace.cwd ?? workspace.id.slice(0, 8)}
-                    </option>
+                <SelectTrigger className="w-full h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EXECUTION_WORKSPACE_MODES.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
                   ))}
-                </select>
+                </SelectContent>
+              </Select>
+              {executionWorkspaceMode === "reuse_existing" && (
+                <Select
+                  value={selectedExecutionWorkspaceId}
+                  onValueChange={(value) => setSelectedExecutionWorkspaceId(value)}
+                >
+                  <SelectTrigger className="w-full h-8 text-xs">
+                    <SelectValue placeholder="Choose an existing workspace" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {deduplicatedReusableWorkspaces.map((workspace) => (
+                      <SelectItem key={workspace.id} value={workspace.id}>
+                        {workspace.name} · {workspace.status} · {workspace.branchName ?? workspace.cwd ?? workspace.id.slice(0, 8)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
               {executionWorkspaceMode === "reuse_existing" && selectedReusableExecutionWorkspace && (
                 <div className="text-[11px] text-muted-foreground">

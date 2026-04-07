@@ -23,7 +23,11 @@ import {
   joinPromptSections,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
-import { parseCodexJsonl, isCodexUnknownSessionError } from "./parse.js";
+import {
+  parseCodexJsonl,
+  isCodexUnknownSessionError,
+  classifyCodexErrorCode,
+} from "./parse.js";
 import { pathExists, prepareManagedCodexHome, resolveManagedCodexHomeDir, resolveSharedCodexHomeDir } from "./codex-home.js";
 import { resolveCodexDesiredSkillNames } from "./skills.js";
 
@@ -218,6 +222,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
   );
   const command = asString(config.command, "codex");
+  const explicitCommandPath = asString(config.explicitCommandPath, "");
   const model = asString(config.model, "");
   const modelReasoningEffort = asString(
     config.modelReasoningEffort,
@@ -385,8 +390,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   const billingType = resolveCodexBillingType(effectiveEnv);
   const runtimeEnv = ensurePathInEnv(effectiveEnv);
-  await ensureCommandResolvable(command, cwd, runtimeEnv);
-  const resolvedCommand = await resolveCommandForLogs(command, cwd, runtimeEnv);
+
+  // Handle explicit command path or fall back to PATH resolution
+  let resolvedCommandForExecution = command;
+  if (explicitCommandPath && path.isAbsolute(explicitCommandPath)) {
+    // Verify the explicit path exists
+    const exists = await fs.stat(explicitCommandPath).then(() => true).catch(() => false);
+    if (!exists) {
+      throw new Error(
+        `Explicit command path does not exist: "${explicitCommandPath}". ` +
+        `Check that codex is installed at this location, or set the correct path in adapter configuration.`,
+      );
+    }
+    resolvedCommandForExecution = explicitCommandPath;
+  } else {
+    // Fall back to PATH resolution with improved error handling
+    await ensureCommandResolvable(command, cwd, runtimeEnv);
+  }
+
+  const resolvedCommand = await resolveCommandForLogs(resolvedCommandForExecution, cwd, runtimeEnv);
   const loggedEnv = buildInvocationEnvForLogs(env, {
     runtimeEnv,
     includeRuntimeKeys: ["HOME"],
@@ -526,7 +548,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       });
     }
 
-    const proc = await runChildProcess(runId, command, args, {
+    const proc = await runChildProcess(runId, resolvedCommandForExecution, args, {
       cwd,
       env,
       stdin: prompt,
@@ -584,6 +606,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       parsedError ||
       stderrLine ||
       `Codex exited with code ${attempt.proc.exitCode ?? -1}`;
+    const errorCode = classifyCodexErrorCode(
+      [parsedError, attempt.proc.stderr, attempt.proc.stdout].filter(Boolean).join("\n"),
+    );
 
     return {
       exitCode: attempt.proc.exitCode,
@@ -593,6 +618,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         (attempt.proc.exitCode ?? 0) === 0
           ? null
           : fallbackErrorMessage,
+      errorCode,
       usage: attempt.parsed.usage,
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,

@@ -14,6 +14,7 @@ import { useLocation } from "../lib/router";
 const TOAST_COOLDOWN_WINDOW_MS = 10_000;
 const TOAST_COOLDOWN_MAX = 3;
 const RECONNECT_SUPPRESS_MS = 2000;
+const RUN_LOG_INVALIDATION_THROTTLE_MS = 1000;
 const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
 
@@ -474,6 +475,41 @@ function invalidateHeartbeatQueries(
     queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(companyId, agentId) });
   }
+
+  const runId = readString(payload.runId);
+  if (runId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.runDetail(runId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.runWorkspaceOperations(runId) });
+  }
+
+  const issueId = readString(payload.issueId);
+  if (issueId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.issues.liveRuns(issueId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.issues.activeRun(issueId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.issues.runs(issueId) });
+  }
+}
+
+function maybeInvalidateRunLogQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  payload: Record<string, unknown>,
+  runLogInvalidateAt: Map<string, number>,
+) {
+  const runId = readString(payload.runId);
+  if (!runId) return;
+  const now = Date.now();
+  const last = runLogInvalidateAt.get(runId) ?? 0;
+  if (now - last < RUN_LOG_INVALIDATION_THROTTLE_MS) return;
+  runLogInvalidateAt.set(runId, now);
+
+  queryClient.invalidateQueries({ queryKey: queryKeys.runDetail(runId) });
+  queryClient.invalidateQueries({ queryKey: queryKeys.runWorkspaceOperations(runId) });
+
+  const issueId = readString(payload.issueId);
+  if (issueId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.issues.liveRuns(issueId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.issues.activeRun(issueId) });
+  }
 }
 
 function invalidateActivityQueries(
@@ -604,6 +640,7 @@ function handleLiveEvent(
   event: LiveEvent,
   pushToast: (toast: ToastInput) => string | null,
   gate: ToastGate,
+  runLogInvalidateAt: Map<string, number>,
   currentActor: { userId: string | null; agentId: string | null },
 ) {
   if (event.companyId !== expectedCompanyId) return;
@@ -611,6 +648,7 @@ function handleLiveEvent(
   const nameOf = (id: string) => resolveAgentName(queryClient, expectedCompanyId, id);
   const payload = event.payload ?? {};
   if (event.type === "heartbeat.run.log") {
+    maybeInvalidateRunLogQueries(queryClient, payload, runLogInvalidateAt);
     return;
   }
 
@@ -629,6 +667,7 @@ function handleLiveEvent(
   }
 
   if (event.type === "heartbeat.run.event") {
+    invalidateHeartbeatQueries(queryClient, expectedCompanyId, payload);
     return;
   }
 
@@ -719,6 +758,7 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
   const { pushToast } = useToast();
   const location = useLocation();
   const gateRef = useRef<ToastGate>({ cooldownHits: new Map(), suppressUntil: 0 });
+  const runLogInvalidateAtRef = useRef<Map<string, number>>(new Map());
   const pathnameRef = useRef(location.pathname);
   const { data: session, status: sessionStatus } = useQuery({
     queryKey: queryKeys.auth.session,
@@ -794,10 +834,19 @@ export function LiveUpdatesProvider({ children }: { children: ReactNode }) {
 
         try {
           const parsed = JSON.parse(raw) as LiveEvent;
-          handleLiveEvent(queryClient, liveCompanyId, pathnameRef.current, parsed, pushToast, gateRef.current, {
-            userId: currentActorRef.current.userId,
-            agentId: currentActorRef.current.agentId,
-          });
+          handleLiveEvent(
+            queryClient,
+            liveCompanyId,
+            pathnameRef.current,
+            parsed,
+            pushToast,
+            gateRef.current,
+            runLogInvalidateAtRef.current,
+            {
+              userId: currentActorRef.current.userId,
+              agentId: currentActorRef.current.agentId,
+            },
+          );
         } catch {
           // Ignore non-JSON payloads.
         }

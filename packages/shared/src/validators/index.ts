@@ -259,6 +259,18 @@ export {
 } from "./asset.js";
 
 export {
+  agentmailRequirementItemSchema,
+  agentmailRequirementsSchema,
+  agentmailMessageSchema,
+  agentmailWebhookEnvelopeSchema,
+  agentmailWebhookBodySchema,
+  type AgentmailRequirementItem,
+  type AgentmailRequirements,
+  type AgentmailMessage,
+  type AgentmailWebhookBody,
+} from "./agentmail.js";
+
+export {
   createCompanyInviteSchema,
   createOpenClawInvitePromptSchema,
   acceptInviteSchema,

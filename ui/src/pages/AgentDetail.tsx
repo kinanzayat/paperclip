@@ -3108,6 +3108,10 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
   const sessionChanged = run.sessionIdBefore && run.sessionIdAfter && run.sessionIdBefore !== run.sessionIdAfter;
   const sessionId = run.sessionIdAfter || run.sessionIdBefore;
   const hasNonZeroExit = run.exitCode !== null && run.exitCode !== 0;
+  const displayProvider = metrics.provider
+    ?? asNonEmptyString(adapterConfig?.provider);
+  const displayModel = metrics.model
+    ?? asNonEmptyString(adapterConfig?.model);
 
   return (
     <div className="space-y-4 min-w-0">
@@ -3156,10 +3160,6 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             </div>
             {/* Adapter type · provider · model */}
             {(() => {
-              const displayProvider = metrics.provider
-                ?? asNonEmptyString(adapterConfig?.provider);
-              const displayModel = metrics.model
-                ?? asNonEmptyString(adapterConfig?.model);
               if (!adapterType && !displayProvider && !displayModel) return null;
               return (
                 <div className="text-[11px] text-muted-foreground font-mono flex items-center gap-1.5 flex-wrap">
@@ -3254,6 +3254,27 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
                     )}
                   </>
                 )}
+              </div>
+            )}
+            {run.errorCode === "codex_auth_required" && adapterType === "codex_local" && (
+              <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 space-y-1.5">
+                <p>
+                  Codex could not authenticate with the Paperclip-managed <code>CODEX_HOME</code>.
+                </p>
+                <p>
+                  Check the configured account in Costs → Providers, then refresh the shared Codex login with <code>codex login</code> or set <code>OPENAI_API_KEY</code> for this agent.
+                </p>
+              </div>
+            )}
+            {run.errorCode === "codex_quota_exhausted" && adapterType === "codex_local" && (
+              <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 space-y-1.5">
+                <p>
+                  Codex hit the quota bucket for this agent&apos;s active account
+                  {displayModel ? <> and model <code>{displayModel}</code></> : null}.
+                </p>
+                <p>
+                  Compare the account email and plan shown in Costs → Providers with the local Codex CLI account before changing limits or model settings.
+                </p>
               </div>
             )}
             {hasNonZeroExit && (

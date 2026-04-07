@@ -352,6 +352,11 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   });
   const detectedModel = detectedModelData?.model ?? null;
   const detectedModelCandidates = detectedModelData?.candidates ?? [];
+  const detectedModelSource = detectedModelData?.source ?? null;
+  const codexDefaultLabel =
+    adapterType === "codex_local"
+      ? `Default (${detectedModel ?? DEFAULT_CODEX_LOCAL_MODEL})`
+      : undefined;
 
   const { data: companyAgents = [] } = useQuery({
     queryKey: selectedCompanyId ? queryKeys.agents.list(selectedCompanyId) : ["agents", "none", "list"],
@@ -408,6 +413,12 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const currentModelId = isCreate
     ? val!.model
     : eff("adapterConfig", "model", String(config.model ?? ""));
+  const showCodexModelMismatchWarning =
+    !isCreate &&
+    adapterType === "codex_local" &&
+    currentModelId.trim().length > 0 &&
+    detectedModel != null &&
+    currentModelId !== detectedModel;
 
   const thinkingEffortKey =
     adapterType === "codex_local"
@@ -590,7 +601,6 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                     const { adapterType: _at, ...defaults } = defaultCreateValues;
                     const nextValues: CreateConfigValues = { ...defaults, adapterType: t };
                     if (t === "codex_local") {
-                      nextValues.model = DEFAULT_CODEX_LOCAL_MODEL;
                       nextValues.dangerouslyBypassSandbox =
                         DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX;
                     } else if (t === "gemini_local") {
@@ -609,9 +619,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                       adapterType: t,
                       adapterConfig: {
                         model:
-                          t === "codex_local"
-                            ? DEFAULT_CODEX_LOCAL_MODEL
-                            : t === "gemini_local"
+                          t === "gemini_local"
                               ? DEFAULT_GEMINI_LOCAL_MODEL
                             : t === "cursor"
                               ? DEFAULT_CURSOR_LOCAL_MODEL
@@ -755,7 +763,14 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 }}
                 detectModelLabel="Detect model"
                 emptyDetectHint="No model detected. Select or enter one manually."
+                defaultLabel={codexDefaultLabel}
               />
+              {showCodexModelMismatchWarning && (
+                <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                  Saved model <code>{currentModelId}</code> differs from the shared Codex default <code>{detectedModel}</code>
+                  {detectedModelSource ? ` (${detectedModelSource}).` : "."}
+                </div>
+              )}
               {fetchedModelsError && (
                 <p className="text-xs text-destructive">
                   {fetchedModelsError instanceof Error
@@ -1360,6 +1375,7 @@ function ModelDropdown({
   onDetectModel,
   detectModelLabel,
   emptyDetectHint,
+  defaultLabel,
 }: {
   models: AdapterModel[];
   value: string;
@@ -1375,6 +1391,7 @@ function ModelDropdown({
   onDetectModel?: () => Promise<string | null>;
   detectModelLabel?: string;
   emptyDetectHint?: string;
+  defaultLabel?: string;
 }) {
   const [modelSearch, setModelSearch] = useState("");
   const [detectingModel, setDetectingModel] = useState(false);
@@ -1461,7 +1478,7 @@ function ModelDropdown({
             <span className={cn(!value && "text-muted-foreground")}>
               {selected
                 ? selected.label
-                : value || (allowDefault ? "Default" : required ? "Select model (required)" : "Select model")}
+                : value || (allowDefault ? (defaultLabel ?? "Default") : required ? "Select model (required)" : "Select model")}
             </span>
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </button>
@@ -1579,7 +1596,7 @@ function ModelDropdown({
                   onOpenChange(false);
                 }}
               >
-                Default
+                {defaultLabel ?? "Default"}
               </button>
             )}
             {canCreateManualModel && (

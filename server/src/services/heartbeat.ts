@@ -356,6 +356,11 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function resolveIssueIdFromRunContext(run: Pick<typeof heartbeatRuns.$inferSelect, "contextSnapshot">): string | null {
+  const context = parseObject(run.contextSnapshot);
+  return readNonEmptyString(context.issueId);
+}
+
 function normalizeLedgerBillingType(value: unknown): BillingType {
   const raw = readNonEmptyString(value);
   switch (raw) {
@@ -1676,11 +1681,13 @@ export function heartbeatService(db: Db) {
       .then((rows) => rows[0] ?? null);
 
     if (updated) {
+      const issueId = resolveIssueIdFromRunContext(updated);
       publishLiveEvent({
         companyId: updated.companyId,
         type: "heartbeat.run.status",
         payload: {
           runId: updated.id,
+          issueId,
           agentId: updated.agentId,
           status: updated.status,
           invocationSource: updated.invocationSource,
@@ -1746,6 +1753,7 @@ export function heartbeatService(db: Db) {
       type: "heartbeat.run.event",
       payload: {
         runId: run.id,
+        issueId: resolveIssueIdFromRunContext(run),
         agentId: run.agentId,
         seq,
         eventType: event.eventType,
@@ -1888,6 +1896,7 @@ export function heartbeatService(db: Db) {
       type: "heartbeat.run.queued",
       payload: {
         runId: queued.id,
+        issueId: resolveIssueIdFromRunContext(queued),
         agentId: queued.agentId,
         invocationSource: queued.invocationSource,
         triggerDetail: queued.triggerDetail,
@@ -1968,6 +1977,7 @@ export function heartbeatService(db: Db) {
       type: "heartbeat.run.status",
       payload: {
         runId: claimed.id,
+        issueId: resolveIssueIdFromRunContext(claimed),
         agentId: claimed.agentId,
         status: claimed.status,
         invocationSource: claimed.invocationSource,
@@ -2780,6 +2790,7 @@ export function heartbeatService(db: Db) {
           type: "heartbeat.run.log",
           payload: {
             runId: run.id,
+            issueId: resolveIssueIdFromRunContext(run),
             agentId: run.agentId,
             ts,
             stream,
@@ -3332,6 +3343,7 @@ export function heartbeatService(db: Db) {
       type: "heartbeat.run.queued",
       payload: {
         runId: promotedRun.id,
+        issueId: resolveIssueIdFromRunContext(promotedRun),
         agentId: promotedRun.agentId,
         invocationSource: promotedRun.invocationSource,
         triggerDetail: promotedRun.triggerDetail,
@@ -3717,6 +3729,7 @@ export function heartbeatService(db: Db) {
         type: "heartbeat.run.queued",
         payload: {
           runId: newRun.id,
+          issueId: resolveIssueIdFromRunContext(newRun),
           agentId: newRun.agentId,
           invocationSource: newRun.invocationSource,
           triggerDetail: newRun.triggerDetail,
@@ -3825,6 +3838,7 @@ export function heartbeatService(db: Db) {
       type: "heartbeat.run.queued",
       payload: {
         runId: newRun.id,
+        issueId: resolveIssueIdFromRunContext(newRun),
         agentId: newRun.agentId,
         invocationSource: newRun.invocationSource,
         triggerDetail: newRun.triggerDetail,

@@ -18,6 +18,10 @@ export interface ProviderQuotaResult {
   provider: string;
   /** source label when the provider reports where the quota data came from */
   source?: string | null;
+  /** authenticated provider account email, when available */
+  accountEmail?: string | null;
+  /** provider plan tier, when available */
+  planType?: string | null;
   /** true when the fetch succeeded and windows is populated */
   ok: boolean;
   /** error message when ok is false */

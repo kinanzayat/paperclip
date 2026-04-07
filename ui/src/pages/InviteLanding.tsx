@@ -6,6 +6,13 @@ import { authApi } from "../api/auth";
 import { healthApi } from "../api/health";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { AGENT_ADAPTER_TYPES } from "@paperclipai/shared";
 import type { AgentAdapterType, JoinRequest } from "@paperclipai/shared";
 
@@ -261,17 +268,21 @@ export function InviteLandingPage() {
             </label>
             <label className="block text-sm">
               <span className="mb-1 block text-muted-foreground">Adapter type</span>
-              <select
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              <Select
                 value={adapterType}
-                onChange={(event) => setAdapterType(event.target.value as AgentAdapterType)}
+                onValueChange={(value) => setAdapterType(value as AgentAdapterType)}
               >
-                {joinAdapterOptions.map((type) => (
-                  <option key={type} value={type} disabled={!ENABLED_INVITE_ADAPTERS.has(type)}>
-                    {getAdapterLabel(type)}{!ENABLED_INVITE_ADAPTERS.has(type) ? " (Coming soon)" : ""}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {joinAdapterOptions.map((type) => (
+                    <SelectItem key={type} value={type} disabled={!ENABLED_INVITE_ADAPTERS.has(type)}>
+                      {getAdapterLabel(type)}{!ENABLED_INVITE_ADAPTERS.has(type) ? " (Coming soon)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
             <label className="block text-sm">
               <span className="mb-1 block text-muted-foreground">Capabilities (optional)</span>

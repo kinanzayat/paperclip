@@ -1,5 +1,10 @@
 import { asString, asNumber, parseObject, parseJson } from "@paperclipai/adapter-utils/server-utils";
 
+const CODEX_QUOTA_EXHAUSTED_RE =
+  /(?:you(?:'|’)ve hit your usage limit|usage limit|quota exceeded|rate limit exceeded|try again at \d{1,2}:\d{2}\s*(?:am|pm))/i;
+const CODEX_AUTH_REQUIRED_RE =
+  /(?:not\s+logged\s+in|login\s+required|authentication\s+required|unauthorized|invalid(?:\s+or\s+missing)?\s+api(?:[_\s-]?key)?|openai[_\s-]?api[_\s-]?key|api[_\s-]?key.*required|please\s+run\s+`?codex\s+login`?|no access token was provided|no authorization provided|invalid[_\s-]?token|authrequired)/i;
+
 export function parseCodexJsonl(stdout: string) {
   let sessionId: string | null = null;
   const messages: string[] = [];
@@ -70,4 +75,11 @@ export function isCodexUnknownSessionError(stdout: string, stderr: string): bool
   return /unknown (session|thread)|session .* not found|thread .* not found|conversation .* not found|missing rollout path for thread|state db missing rollout path/i.test(
     haystack,
   );
+}
+
+export function classifyCodexErrorCode(message: string | null | undefined): string | null {
+  if (!message) return null;
+  if (CODEX_QUOTA_EXHAUSTED_RE.test(message)) return "codex_quota_exhausted";
+  if (CODEX_AUTH_REQUIRED_RE.test(message)) return "codex_auth_required";
+  return null;
 }

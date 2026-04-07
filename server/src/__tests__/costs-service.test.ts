@@ -118,6 +118,12 @@ function createAppWithActor(actor: any) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockAccessService.isCompanyAdmin.mockResolvedValue(true);
+  mockCompanyService.getById.mockImplementation(async (companyId: string) => ({
+    id: companyId,
+    name: "Paperclip",
+    budgetMonthlyCents: 100,
+    spentMonthlyCents: 0,
+  }));
   mockCompanyService.update.mockResolvedValue({
     id: "company-1",
     name: "Paperclip",
@@ -177,6 +183,48 @@ describe("cost routes", () => {
       .query({ limit: "0" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid 'limit'/i);
+  });
+
+  it("threads company-scoped quota requests through to the quota service", async () => {
+    mockFetchAllQuotaWindows.mockImplementation(async (companyId: string) => [
+      {
+        provider: "openai",
+        source: "codex-rpc",
+        accountEmail: `${companyId}@example.com`,
+        planType: "pro",
+        ok: true,
+        windows: [],
+      },
+    ]);
+    const app = createApp();
+
+    const first = await request(app).get("/api/companies/company-1/costs/quota-windows");
+    const second = await request(app).get("/api/companies/company-2/costs/quota-windows");
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(mockFetchAllQuotaWindows).toHaveBeenNthCalledWith(1, "company-1");
+    expect(mockFetchAllQuotaWindows).toHaveBeenNthCalledWith(2, "company-2");
+    expect(first.body).toEqual([
+      {
+        provider: "openai",
+        source: "codex-rpc",
+        accountEmail: "company-1@example.com",
+        planType: "pro",
+        ok: true,
+        windows: [],
+      },
+    ]);
+    expect(second.body).toEqual([
+      {
+        provider: "openai",
+        source: "codex-rpc",
+        accountEmail: "company-2@example.com",
+        planType: "pro",
+        ok: true,
+        windows: [],
+      },
+    ]);
   });
 
   it("accepts valid finance event list limits", async () => {

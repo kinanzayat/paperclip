@@ -5,6 +5,8 @@ interface CodexSubscriptionPanelProps {
   windows: QuotaWindow[];
   source?: string | null;
   error?: string | null;
+  accountEmail?: string | null;
+  planType?: string | null;
 }
 
 const WINDOW_PRIORITY = [
@@ -56,6 +58,8 @@ export function CodexSubscriptionPanel({
   windows,
   source = null,
   error = null,
+  accountEmail = null,
+  planType = null,
 }: CodexSubscriptionPanelProps) {
   const ordered = orderedWindows(windows);
   const accountWindows = ordered.filter((window) => !isModelSpecific(window.label));
@@ -71,6 +75,20 @@ export function CodexSubscriptionPanel({
           <div className="mt-1 text-sm text-muted-foreground">
             Live Codex quota windows.
           </div>
+          {(accountEmail || planType) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              {accountEmail ? (
+                <span className="border border-border px-2 py-1 font-mono text-foreground">
+                  {accountEmail}
+                </span>
+              ) : null}
+              {planType ? (
+                <span className="border border-border px-2 py-1 uppercase tracking-[0.14em] text-muted-foreground">
+                  {planType}
+                </span>
+              ) : null}
+            </div>
+          )}
         </div>
         {source ? (
           <span className="shrink-0 border border-border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">

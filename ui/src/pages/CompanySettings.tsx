@@ -19,6 +19,13 @@ import { statusesApi } from "../api/statuses";
 import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { queryKeys } from "../lib/queryKeys";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Settings, Check, ChevronDown, ChevronUp, Download, Upload } from "lucide-react";
 import { CompanyPatternIcon } from "../components/CompanyPatternIcon";
 import {
@@ -32,8 +39,6 @@ type AgentSnippetInput = {
   connectionCandidates?: string[] | null;
   testResolutionUrl?: string | null;
 };
-
-type InviteSnippetKind = "agent" | "human";
 
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || "https://paperclip.ing/tos";
 
@@ -85,6 +90,7 @@ export function CompanySettings() {
   // General settings local state
   const [companyName, setCompanyName] = useState("");
   const [description, setDescription] = useState("");
+  const [productAnalyzerEmail, setProductAnalyzerEmail] = useState("");
   const [brandColor, setBrandColor] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
@@ -94,13 +100,13 @@ export function CompanySettings() {
     if (!selectedCompany) return;
     setCompanyName(selectedCompany.name);
     setDescription(selectedCompany.description ?? "");
+    setProductAnalyzerEmail(selectedCompany.productAnalyzerEmail ?? "");
     setBrandColor(selectedCompany.brandColor ?? "");
     setLogoUrl(selectedCompany.logoUrl ?? "");
   }, [selectedCompany]);
 
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSnippet, setInviteSnippet] = useState<string | null>(null);
-  const [inviteSnippetKind, setInviteSnippetKind] = useState<InviteSnippetKind>("agent");
   const [snippetCopied, setSnippetCopied] = useState(false);
   const [snippetCopyDelightId, setSnippetCopyDelightId] = useState(0);
   const [newStatusLabel, setNewStatusLabel] = useState("");
@@ -142,6 +148,7 @@ export function CompanySettings() {
     !!selectedCompany &&
     (companyName !== selectedCompany.name ||
       description !== (selectedCompany.description ?? "") ||
+      productAnalyzerEmail !== (selectedCompany.productAnalyzerEmail ?? "") ||
       brandColor !== (selectedCompany.brandColor ?? ""));
 
   const invalidateCompanyStatusViews = async () => {
@@ -159,6 +166,7 @@ export function CompanySettings() {
     mutationFn: (data: {
       name: string;
       description: string | null;
+      productAnalyzerEmail: string | null;
       brandColor: string | null;
     }) => companiesApi.update(selectedCompanyId!, data),
     onSuccess: () => {
@@ -326,7 +334,6 @@ export function CompanySettings() {
       accessApi.createOpenClawInvitePrompt(selectedCompanyId!),
     onSuccess: async (invite) => {
       setInviteError(null);
-      setInviteSnippetKind("agent");
       const base = window.location.origin.replace(/\/+$/, "");
       const onboardingTextLink =
         invite.onboardingTextUrl ??
@@ -375,40 +382,6 @@ export function CompanySettings() {
     }
   });
 
-  const humanInviteMutation = useMutation({
-    mutationFn: () =>
-      accessApi.createCompanyInvite(selectedCompanyId!, { allowedJoinTypes: "human" }),
-    onSuccess: async (invite) => {
-      setInviteError(null);
-      setInviteSnippetKind("human");
-      const inviteLink = invite.inviteUrl.startsWith("http")
-        ? invite.inviteUrl
-        : `${window.location.origin.replace(/\/+$/, "")}${invite.inviteUrl}`;
-      const snippet = [
-        "Invite a new human member to join this company:",
-        inviteLink,
-        "",
-        "They should open the link, sign in or create an account, and submit the join request.",
-      ].join("\n");
-      setInviteSnippet(snippet);
-      setSnippetCopied(false);
-      setSnippetCopyDelightId(0);
-      try {
-        await navigator.clipboard.writeText(snippet);
-        setSnippetCopied(true);
-        setSnippetCopyDelightId((prev) => prev + 1);
-        setTimeout(() => setSnippetCopied(false), 2000);
-      } catch {
-        /* clipboard may not be available */
-      }
-    },
-    onError: (err) => {
-      setInviteError(
-        err instanceof Error ? err.message : "Failed to create human invite"
-      );
-    },
-  });
-
   const syncLogoState = (nextLogoUrl: string | null) => {
     setLogoUrl(nextLogoUrl ?? "");
     void queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
@@ -448,7 +421,6 @@ export function CompanySettings() {
   useEffect(() => {
     setInviteError(null);
     setInviteSnippet(null);
-    setInviteSnippetKind("agent");
     setSnippetCopied(false);
     setSnippetCopyDelightId(0);
   }, [selectedCompanyId]);
@@ -583,6 +555,7 @@ export function CompanySettings() {
     generalMutation.mutate({
       name: companyName.trim(),
       description: description.trim() || null,
+      productAnalyzerEmail: productAnalyzerEmail.trim() || null,
       brandColor: brandColor || null
     });
   }
@@ -618,6 +591,18 @@ export function CompanySettings() {
               value={description}
               placeholder="Optional company description"
               onChange={(e) => setDescription(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Product analyzer email"
+            hint="AgentMail summary emails will be sent to this address for this company."
+          >
+            <input
+              className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+              type="email"
+              value={productAnalyzerEmail}
+              placeholder="product-analyzer@your-company.example"
+              onChange={(e) => setProductAnalyzerEmail(e.target.value)}
             />
           </Field>
         </div>
@@ -831,21 +816,24 @@ export function CompanySettings() {
               />
             </Field>
             <Field label="Category" hint="Determines workflow semantics.">
-              <select
-                className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+              <Select
                 value={newStatusCategory}
-                onChange={(e) => {
-                  const nextCategory = e.target.value as IssueStatusCategory;
-                  setNewStatusCategory(nextCategory);
-                  setNewStatusColor(DEFAULT_STATUS_COLORS[nextCategory]);
+                onValueChange={(nextCategory) => {
+                  setNewStatusCategory(nextCategory as IssueStatusCategory);
+                  setNewStatusColor(DEFAULT_STATUS_COLORS[nextCategory as IssueStatusCategory]);
                 }}
               >
-                {ISSUE_STATUS_CATEGORIES.map((category) => (
-                  <option key={category} value={category}>
-                    {STATUS_CATEGORY_LABELS[category]}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ISSUE_STATUS_CATEGORIES.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {STATUS_CATEGORY_LABELS[category]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             <Field label="Color" hint="Hex color used across badges and boards.">
               <div className="flex items-center gap-2">
@@ -1000,18 +988,22 @@ export function CompanySettings() {
                     {member.user?.email ?? member.principalId} · {member.status}
                   </div>
                 </div>
-                <select
-                  className="rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+                <Select
                   value={member.membershipRole ?? "member"}
-                  onChange={(e) => updateMemberRoleMutation.mutate({
+                  onValueChange={(role) => updateMemberRoleMutation.mutate({
                     memberId: member.id,
-                    membershipRole: e.target.value as CompanyMembershipRole,
+                    membershipRole: role as CompanyMembershipRole,
                   })}
                   disabled={updateMemberRoleMutation.isPending}
                 >
-                  <option value="member">Member</option>
-                  <option value="admin">Admin</option>
-                </select>
+                  <SelectTrigger className="w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="member">Member</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             ))
           )}
@@ -1074,25 +1066,14 @@ export function CompanySettings() {
         <div className="space-y-3 rounded-md border border-border px-4 py-4">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">
-              Invite a human member or generate an OpenClaw agent invite snippet.
+              Generate an OpenClaw agent invite snippet.
             </span>
-            <HintIcon text="Human invites create a direct company join link. OpenClaw invites generate onboarding text for agent registration." />
+            <HintIcon text="Creates a short-lived OpenClaw agent invite and renders a copy-ready prompt." />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
-              data-testid="company-settings-invites-generate-member-button"
-              size="sm"
-              onClick={() => humanInviteMutation.mutate()}
-              disabled={humanInviteMutation.isPending}
-            >
-              {humanInviteMutation.isPending
-                ? "Generating..."
-                : "Generate Member Invite Link"}
-            </Button>
-            <Button
               data-testid="company-settings-invites-generate-button"
               size="sm"
-              variant="outline"
               onClick={() => inviteMutation.mutate()}
               disabled={inviteMutation.isPending}
             >
@@ -1111,7 +1092,7 @@ export function CompanySettings() {
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs text-muted-foreground">
-                  {inviteSnippetKind === "human" ? "Member Invite Link" : "OpenClaw Invite Prompt"}
+                  OpenClaw Invite Prompt
                 </div>
                 {snippetCopied && (
                   <span

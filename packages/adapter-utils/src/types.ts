@@ -209,6 +209,10 @@ export interface AdapterEnvironmentTestContext {
   };
 }
 
+export interface AdapterQuotaContext {
+  companyId?: string;
+}
+
 /** Payload for the onHireApproved adapter lifecycle hook (e.g. join-request or hire_agent approval). */
 export interface HireApprovedPayload {
   companyId: string;
@@ -254,6 +258,10 @@ export interface ProviderQuotaResult {
   provider: string;
   /** source label when the provider reports where the quota data came from */
   source?: string | null;
+  /** authenticated provider account email, when available */
+  accountEmail?: string | null;
+  /** provider plan tier, when available */
+  planType?: string | null;
   /** true when the fetch succeeded and windows is populated */
   ok: boolean;
   /** error message when ok is false */
@@ -314,7 +322,7 @@ export interface ServerAdapterModule {
    * Returns a ProviderQuotaResult so the server can aggregate across adapters
    * without knowing provider-specific credential paths or API shapes.
    */
-  getQuotaWindows?: () => Promise<ProviderQuotaResult>;
+  getQuotaWindows?: (context?: AdapterQuotaContext) => Promise<ProviderQuotaResult>;
   /**
    * Optional: detect the currently configured model from local config files.
    * Returns the detected model/provider and the config source, or null if

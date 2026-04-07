@@ -53,4 +53,36 @@ describe("fetchAllQuotaWindows", () => {
       },
     ]);
   });
+
+  it("passes company context through to adapter quota fetches and preserves account metadata", async () => {
+    const getQuotaWindows = vi.fn().mockResolvedValue({
+      provider: "openai",
+      source: "codex-rpc",
+      accountEmail: "company-a@example.com",
+      planType: "pro",
+      ok: true,
+      windows: [],
+    });
+
+    vi.mocked(listServerAdapters).mockReturnValue([
+      {
+        type: "codex_local",
+        getQuotaWindows,
+      },
+    ] as never);
+
+    const results = await fetchAllQuotaWindows("company-a");
+
+    expect(getQuotaWindows).toHaveBeenCalledWith({ companyId: "company-a" });
+    expect(results).toEqual([
+      {
+        provider: "openai",
+        source: "codex-rpc",
+        accountEmail: "company-a@example.com",
+        planType: "pro",
+        ok: true,
+        windows: [],
+      },
+    ]);
+  });
 });

@@ -104,6 +104,7 @@ const mockSecretService = vi.hoisted(() => ({
 const mockLogActivity = vi.hoisted(() => vi.fn());
 const mockTrackAgentCreated = vi.hoisted(() => vi.fn());
 const mockGetTelemetryClient = vi.hoisted(() => vi.fn());
+const mockDetectAdapterModel = vi.hoisted(() => vi.fn());
 
 const mockAdapter = vi.hoisted(() => ({
   listSkills: vi.fn(),
@@ -140,7 +141,7 @@ vi.mock("../adapters/index.js", () => ({
   findServerAdapter: vi.fn(() => mockAdapter),
   findActiveServerAdapter: vi.fn(() => mockAdapter),
   listAdapterModels: vi.fn(),
-  detectAdapterModel: vi.fn(),
+  detectAdapterModel: mockDetectAdapterModel,
 }));
 
 function createDb(requireBoardApprovalForNewAgents = false) {
@@ -198,6 +199,7 @@ describe("agent skill routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockGetTelemetryClient.mockReturnValue({ track: vi.fn() });
+    mockDetectAdapterModel.mockResolvedValue(null);
     mockAgentService.resolveByReference.mockResolvedValue({
       ambiguous: false,
       agent: makeAgent("claude_local"),
@@ -547,5 +549,74 @@ describe("agent skill routes", () => {
       | { payload?: { adapterConfig?: Record<string, unknown> } }
       | undefined;
     expect(approvalInput?.payload?.adapterConfig?.promptTemplate).toBeUndefined();
+  });
+
+  it("fills missing codex models from detected shared Codex defaults on create", async () => {
+    mockDetectAdapterModel.mockResolvedValue({
+      model: "gpt-5.4",
+      provider: "openai",
+      source: "/tmp/.codex/config.toml",
+    });
+
+    const res = await request(createApp())
+      .post("/api/companies/company-1/agents")
+      .send({
+        name: "Codex Agent",
+        role: "engineer",
+        adapterType: "codex_local",
+        adapterConfig: {},
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockDetectAdapterModel).toHaveBeenCalledWith("codex_local");
+    expect(mockAgentService.create).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        adapterType: "codex_local",
+        adapterConfig: expect.objectContaining({
+          model: "gpt-5.4",
+        }),
+      }),
+    );
+  });
+
+  it("keeps an explicit codex model on patch instead of rewriting it to the detected default", async () => {
+    mockDetectAdapterModel.mockResolvedValue({
+      model: "gpt-5.4",
+      provider: "openai",
+      source: "/tmp/.codex/config.toml",
+    });
+    mockAgentService.getById.mockResolvedValue({
+      ...makeAgent("codex_local"),
+      adapterConfig: {
+        model: "gpt-5.3-codex",
+        command: "codex",
+      },
+    });
+    mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...makeAgent("codex_local"),
+      adapterConfig: patch.adapterConfig ?? {},
+    }));
+
+    const res = await request(createApp())
+      .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+      .send({
+        adapterConfig: {
+          search: true,
+        },
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({
+        adapterConfig: expect.objectContaining({
+          model: "gpt-5.3-codex",
+          command: "codex",
+          search: true,
+        }),
+      }),
+      expect.any(Object),
+    );
   });
 });

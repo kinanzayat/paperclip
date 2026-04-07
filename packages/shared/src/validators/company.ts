@@ -4,6 +4,7 @@ import { COMPANY_STATUSES } from "../constants.js";
 const logoAssetIdSchema = z.string().uuid().nullable().optional();
 const brandColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional();
 const feedbackDataSharingTermsVersionSchema = z.string().min(1).nullable().optional();
+const productAnalyzerEmailSchema = z.string().trim().email().nullable().optional();
 
 export const createCompanySchema = z.object({
   name: z.string().min(1),
@@ -23,6 +24,7 @@ export const updateCompanySchema = createCompanySchema
     feedbackDataSharingConsentAt: z.coerce.date().nullable().optional(),
     feedbackDataSharingConsentByUserId: z.string().min(1).nullable().optional(),
     feedbackDataSharingTermsVersion: feedbackDataSharingTermsVersionSchema,
+    productAnalyzerEmail: productAnalyzerEmailSchema,
     brandColor: brandColorSchema,
     logoAssetId: logoAssetIdSchema,
   });

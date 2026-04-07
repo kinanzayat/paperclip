@@ -5,6 +5,13 @@ import { isUuidLike, type ProjectWorkspace } from "@paperclipai/shared";
 import { ArrowLeft, Check, ExternalLink, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ChoosePathButton } from "../components/PathInstructionsModal";
 import { projectsApi } from "../api/projects";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -413,33 +420,37 @@ export function ProjectWorkspaceDetail() {
               </Field>
 
               <Field label="Visibility">
-                <select
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none"
+                <Select
                   value={form.visibility}
-                  onChange={(event) =>
-                    setForm((current) => current ? { ...current, visibility: event.target.value as ProjectWorkspaceVisibility } : current)
-                  }
+                  onValueChange={(value) => setForm((current) => current ? { ...current, visibility: value as ProjectWorkspaceVisibility } : current)}
                 >
-                  {VISIBILITY_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VISIBILITY_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </Field>
             </div>
 
             <div className="mt-4 grid gap-4">
               <Field label="Source type" hint={sourceTypeDescription ?? undefined}>
-                <select
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none"
+                <Select
                   value={form.sourceType}
-                  onChange={(event) =>
-                    setForm((current) => current ? { ...current, sourceType: event.target.value as ProjectWorkspaceSourceType } : current)
-                  }
+                  onValueChange={(value) => setForm((current) => current ? { ...current, sourceType: value as ProjectWorkspaceSourceType } : current)}
                 >
-                  {SOURCE_TYPE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SOURCE_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </Field>
 
               <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">

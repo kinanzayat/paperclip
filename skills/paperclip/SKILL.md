@@ -342,6 +342,57 @@ For export, preview first and keep tasks explicit:
 - Add `issues` or `projectIssues` only when you intentionally need task files
 - Use `selectedFiles` to narrow the final package to specific agents, skills, projects, or tasks after you inspect the preview inventory
 
+## AgentMail Workflow
+
+Use this when working on the AgentMail email-to-issue loop, webhook intake, issue updates, or approval replies.
+
+### Source of truth
+
+- Treat inbound `message.received` events as the production signal.
+- Treat `message.received.blocked` as diagnostics only.
+- Keep the issue tree, comments, and delivery record aligned with the analyzed email requirements.
+
+### Skill content
+
+- Merge AgentMail guidance into this Paperclip skill rather than creating a separate repo skill.
+- Use the AgentMail website docs as the content source for:
+  - webhook setup
+  - inbox and thread management
+  - message send/reply/update operations
+  - plain-text markdown email formatting
+  - AgentMail CLI usage
+- For Codex or other dev agents, prefer the AgentMail CLI when you need to inspect inboxes, webhooks, or message state from the operator side.
+
+### AgentMail CLI quick reference
+
+Use `AGENTMAIL_API_KEY` with the AgentMail CLI when debugging or managing AgentMail resources:
+
+```bash
+agentmail inboxes list
+agentmail webhooks list
+agentmail webhooks create --event-type message.received --url https://example.com/webhook
+agentmail inboxes:messages send --inbox-id <inbox_id> --to user@example.com --subject "Hello" --text "Hi there"
+agentmail inboxes:messages reply --inbox-id <inbox_id> --message-id <message_id> --text "Thanks, I will look into it."
+```
+
+Prefer plain text with markdown emphasis, bullets, and links for approval replies. Do not add HTML unless a task explicitly asks for it.
+
+### Close the loop
+
+- Follow Peter Steinberger's close-the-loop concept: write code, add or update tests, run them locally, fix failures, rerun, and only then report done.
+- Use the local close-the-loop guidance in `ctrl-master/TESTING.md` and `ctrl-master/AGENTS.md` as the verification contract for dev-agent work.
+- For code changes, add colocated tests next to the source file when practical.
+- For UI changes, run a real browser smoke check before closing the task.
+- Do not return implementation code unless the self-test path and the relevant verification steps have been exercised.
+
+### Suggested verification for AgentMail work
+
+1. Simulate `message.received` and confirm issue creation/update works.
+2. Simulate `message.received.blocked` and confirm it records diagnostics only.
+3. Send a real inbox email and confirm the issue tree, comments, and reply draft match the analyzed requirement.
+4. Open the issue in the browser and confirm the intake/analysis data is visible.
+5. Run the targeted tests and typecheck before finishing.
+
 ## Searching Issues
 
 Use the `q` query parameter on the issues list endpoint to search across titles, identifiers, descriptions, and comments:

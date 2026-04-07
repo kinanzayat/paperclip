@@ -8,7 +8,6 @@ interface NewIssueDefaults {
   assigneeUserId?: string;
   title?: string;
   description?: string;
-  parentId?: string;
 }
 
 interface NewGoalDefaults {

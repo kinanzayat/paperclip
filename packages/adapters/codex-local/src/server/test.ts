@@ -2,6 +2,7 @@ import type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestContext,
   AdapterEnvironmentTestResult,
+  AdapterExecutionContext,
 } from "@paperclipai/adapter-utils";
 import {
   asString,
@@ -16,6 +17,7 @@ import {
 import path from "node:path";
 import { parseCodexJsonl } from "./parse.js";
 import { codexHomeDir, readCodexAuthInfo } from "./quota.js";
+import { prepareManagedCodexHome, resolveManagedCodexHomeDir } from "./codex-home.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -51,13 +53,12 @@ function summarizeProbeDetail(stdout: string, stderr: string, parsedError: strin
 
 const CODEX_AUTH_REQUIRED_RE =
   /(?:not\s+logged\s+in|login\s+required|authentication\s+required|unauthorized|invalid(?:\s+or\s+missing)?\s+api(?:[_\s-]?key)?|openai[_\s-]?api[_\s-]?key|api[_\s-]?key.*required|please\s+run\s+`?codex\s+login`?)/i;
-const CODEX_USAGE_LIMIT_RE =
-  /(?:usage\s+limit|rate\s+limit|quota\s+exceeded|credits?\s+(?:exhausted|depleted)|try\s+again\s+at|purchase\s+more\s+credits|chatgpt\.com\/codex\/settings\/usage)/i;
 
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
+  const noopLog: AdapterExecutionContext["onLog"] = async () => {};
   const config = parseObject(ctx.config);
   const command = asString(config.command, "codex");
   const cwd = asString(config.cwd, process.cwd());
@@ -83,7 +84,34 @@ export async function testEnvironment(
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  const explicitCodexHome = isNonEmpty(env.CODEX_HOME) ? path.resolve(env.CODEX_HOME) : null;
+  let effectiveCodexHome = explicitCodexHome;
+  if (!effectiveCodexHome) {
+    try {
+      effectiveCodexHome = await prepareManagedCodexHome(process.env, noopLog, ctx.companyId);
+    } catch (err) {
+      checks.push({
+        code: "codex_home_prepare_failed",
+        level: "error",
+        message: err instanceof Error ? err.message : "Failed to prepare managed Codex home",
+      });
+    }
+  }
+  const runtimeEnv = ensurePathInEnv({
+    ...process.env,
+    ...env,
+    ...(effectiveCodexHome ? { CODEX_HOME: effectiveCodexHome } : {}),
+  });
+  if (effectiveCodexHome) {
+    checks.push({
+      code: "codex_home_effective",
+      level: "info",
+      message: explicitCodexHome
+        ? "Using explicit CODEX_HOME from adapter env."
+        : "Using Paperclip-managed Codex home.",
+      detail: explicitCodexHome ?? resolveManagedCodexHomeDir(process.env, ctx.companyId),
+    });
+  }
   try {
     await ensureCommandResolvable(command, cwd, runtimeEnv);
     checks.push({
@@ -111,14 +139,16 @@ export async function testEnvironment(
       detail: `Detected in ${source}.`,
     });
   } else {
-    const codexHome = isNonEmpty(env.CODEX_HOME) ? env.CODEX_HOME : undefined;
+    const codexHome = effectiveCodexHome ?? (isNonEmpty(env.CODEX_HOME) ? env.CODEX_HOME : undefined);
     const codexAuth = await readCodexAuthInfo(codexHome).catch(() => null);
     if (codexAuth) {
       checks.push({
         code: "codex_native_auth_present",
         level: "info",
         message: "Codex is authenticated via its own auth configuration.",
-        detail: codexAuth.email ? `Logged in as ${codexAuth.email}.` : `Credentials found in ${path.join(codexHome ?? codexHomeDir(), "auth.json")}.`,
+        detail: codexAuth.email
+          ? `Logged in as ${codexAuth.email}${codexAuth.planType ? ` (${codexAuth.planType})` : ""}.`
+          : `Credentials found in ${path.join(codexHome ?? codexHomeDir(), "auth.json")}.`,
       });
     } else {
       checks.push({
@@ -131,7 +161,12 @@ export async function testEnvironment(
   }
 
   const canRunProbe =
-    checks.every((check) => check.code !== "codex_cwd_invalid" && check.code !== "codex_command_unresolvable");
+    checks.every(
+      (check) =>
+        check.code !== "codex_cwd_invalid" &&
+        check.code !== "codex_command_unresolvable" &&
+        check.code !== "codex_home_prepare_failed",
+    );
   if (canRunProbe) {
     if (!commandLooksLike(command, "codex")) {
       checks.push({
@@ -168,65 +203,22 @@ export async function testEnvironment(
       if (extraArgs.length > 0) args.push(...extraArgs);
       args.push("-");
 
-      let probe: Awaited<ReturnType<typeof runChildProcess>> | null = null;
-      let probeError: Error | null = null;
-      try {
-        probe = await runChildProcess(
-          `codex-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          command,
-          args,
-          {
-            cwd,
-            env,
-            timeoutSec: 45,
-            graceSec: 5,
-            stdin: "Respond with hello.",
-            onLog: async () => {},
-          },
-        );
-      } catch (error) {
-        probeError = error instanceof Error ? error : new Error(String(error));
-      }
-
-      if (probeError) {
-        const detail = summarizeProbeDetail("", probeError.message, null);
-        if (CODEX_USAGE_LIMIT_RE.test(probeError.message)) {
-          checks.push({
-            code: "codex_hello_probe_quota_exceeded",
-            level: "warn",
-            message: "Codex CLI is installed, but this account has reached its usage limit.",
-            ...(detail ? { detail } : {}),
-            hint: "Switch to an account with available quota or wait for reset, then retry the probe.",
-          });
-        } else if (CODEX_AUTH_REQUIRED_RE.test(probeError.message)) {
-          checks.push({
-            code: "codex_hello_probe_auth_required",
-            level: "warn",
-            message: "Codex CLI is installed, but authentication is not ready.",
-            ...(detail ? { detail } : {}),
-            hint: "Configure OPENAI_API_KEY in adapter env/shell or run `codex login`, then retry the probe.",
-          });
-        } else {
-          checks.push({
-            code: "codex_hello_probe_unavailable",
-            level: "warn",
-            message: "Codex hello probe could not be started in this environment.",
-            ...(detail ? { detail } : {}),
-            hint: "Verify the Codex CLI command and permissions, then retry the probe.",
-          });
-        }
-        return {
-          adapterType: ctx.adapterType,
-          status: summarizeStatus(checks),
-          checks,
-          testedAt: new Date().toISOString(),
-        };
-      }
-
+      const probe = await runChildProcess(
+        `codex-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        command,
+        args,
+        {
+          cwd,
+          env: effectiveCodexHome ? { ...env, CODEX_HOME: effectiveCodexHome } : env,
+          timeoutSec: 45,
+          graceSec: 5,
+          stdin: "Respond with hello.",
+          onLog: async () => {},
+        },
+      );
       const parsed = parseCodexJsonl(probe.stdout);
       const detail = summarizeProbeDetail(probe.stdout, probe.stderr, parsed.errorMessage);
       const authEvidence = `${parsed.errorMessage ?? ""}\n${probe.stdout}\n${probe.stderr}`.trim();
-      const quotaEvidence = `${probe.stdout}\n${probe.stderr}\n${parsed.errorMessage ?? ""}`.trim();
 
       if (probe.timedOut) {
         checks.push({
@@ -258,14 +250,6 @@ export async function testEnvironment(
           message: "Codex CLI is installed, but authentication is not ready.",
           ...(detail ? { detail } : {}),
           hint: "Configure OPENAI_API_KEY in adapter env/shell or run `codex login`, then retry the probe.",
-        });
-      } else if (CODEX_USAGE_LIMIT_RE.test(quotaEvidence)) {
-        checks.push({
-          code: "codex_hello_probe_quota_exceeded",
-          level: "warn",
-          message: "Codex CLI is installed, but this account has reached its usage limit.",
-          ...(detail ? { detail } : {}),
-          hint: "Switch to an account with available quota or wait for reset, then retry the probe.",
         });
       } else {
         checks.push({

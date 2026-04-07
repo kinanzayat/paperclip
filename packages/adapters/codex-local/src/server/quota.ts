@@ -1,17 +1,22 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import type { ProviderQuotaResult, QuotaWindow } from "@paperclipai/adapter-utils";
+import type {
+  AdapterExecutionContext,
+  AdapterQuotaContext,
+  ProviderQuotaResult,
+  QuotaWindow,
+} from "@paperclipai/adapter-utils";
+import { prepareManagedCodexHome, resolveSharedCodexHomeDir } from "./codex-home.js";
 
 const CODEX_USAGE_SOURCE_RPC = "codex-rpc";
 const CODEX_USAGE_SOURCE_WHAM = "codex-wham";
 
 export function codexHomeDir(): string {
-  const fromEnv = process.env.CODEX_HOME;
-  if (typeof fromEnv === "string" && fromEnv.trim().length > 0) return fromEnv.trim();
-  return path.join(os.homedir(), ".codex");
+  return resolveSharedCodexHomeDir(process.env);
 }
+
+const noopLog: AdapterExecutionContext["onLog"] = async () => {};
 
 interface CodexLegacyAuthFile {
   accessToken?: string | null;
@@ -161,8 +166,10 @@ export async function readCodexAuthInfo(codexHome?: string): Promise<CodexAuthIn
   };
 }
 
-export async function readCodexToken(): Promise<{ token: string; accountId: string | null } | null> {
-  const auth = await readCodexAuthInfo();
+export async function readCodexToken(
+  codexHome?: string,
+): Promise<{ token: string; accountId: string | null } | null> {
+  const auth = await readCodexAuthInfo(codexHome);
   if (!auth) return null;
   return { token: auth.accessToken, accountId: auth.accountId };
 }
@@ -406,19 +413,26 @@ type PendingRequest = {
   timer: NodeJS.Timeout;
 };
 
+type CodexRpcProcess = ReturnType<typeof spawn> & {
+  stdin: NonNullable<ReturnType<typeof spawn>["stdin"]>;
+  stdout: NonNullable<ReturnType<typeof spawn>["stdout"]>;
+  stderr: NonNullable<ReturnType<typeof spawn>["stderr"]>;
+};
+
 class CodexRpcClient {
-  private proc = spawn(
-    "codex",
-    ["-s", "read-only", "-a", "untrusted", "app-server"],
-    { stdio: ["pipe", "pipe", "pipe"], env: process.env },
-  );
+  private proc: CodexRpcProcess;
 
   private nextId = 1;
   private buffer = "";
   private pending = new Map<number, PendingRequest>();
   private stderr = "";
 
-  constructor() {
+  constructor(env: NodeJS.ProcessEnv = process.env) {
+    this.proc = spawn(
+      "codex",
+      ["-s", "read-only", "-a", "untrusted", "app-server"],
+      { stdio: ["pipe", "pipe", "pipe"], env },
+    ) as CodexRpcProcess;
     this.proc.stdout.setEncoding("utf8");
     this.proc.stderr.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.onStdout(chunk));
@@ -511,8 +525,10 @@ class CodexRpcClient {
   }
 }
 
-export async function fetchCodexRpcQuota(): Promise<CodexRpcQuotaSnapshot> {
-  const client = new CodexRpcClient();
+export async function fetchCodexRpcQuota(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<CodexRpcQuotaSnapshot> {
+  const client = new CodexRpcClient(env);
   try {
     await client.initialize();
     const [limits, account] = await Promise.all([
@@ -530,23 +546,44 @@ function formatProviderError(source: string, error: unknown): string {
   return `${source}: ${message}`;
 }
 
-export async function getQuotaWindows(): Promise<ProviderQuotaResult> {
+async function resolveQuotaCodexHome(companyId?: string): Promise<string> {
+  if (!companyId) return resolveSharedCodexHomeDir(process.env);
+  return prepareManagedCodexHome(process.env, noopLog, companyId);
+}
+
+export async function getQuotaWindowsForHome(codexHome: string): Promise<ProviderQuotaResult> {
   const errors: string[] = [];
+  const probeEnv: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
 
   try {
-    const rpc = await fetchCodexRpcQuota();
+    const rpc = await fetchCodexRpcQuota(probeEnv);
     if (rpc.windows.length > 0) {
-      return { provider: "openai", source: CODEX_USAGE_SOURCE_RPC, ok: true, windows: rpc.windows };
+      return {
+        provider: "openai",
+        source: CODEX_USAGE_SOURCE_RPC,
+        accountEmail: rpc.email,
+        planType: rpc.planType,
+        ok: true,
+        windows: rpc.windows,
+      };
     }
   } catch (error) {
     errors.push(formatProviderError("Codex app-server", error));
   }
 
-  const auth = await readCodexToken();
+  const auth = await readCodexToken(codexHome);
   if (auth) {
     try {
       const windows = await fetchCodexQuota(auth.token, auth.accountId);
-      return { provider: "openai", source: CODEX_USAGE_SOURCE_WHAM, ok: true, windows };
+      const authInfo = await readCodexAuthInfo(codexHome);
+      return {
+        provider: "openai",
+        source: CODEX_USAGE_SOURCE_WHAM,
+        accountEmail: authInfo?.email ?? null,
+        planType: authInfo?.planType ?? null,
+        ok: true,
+        windows,
+      };
     } catch (error) {
       errors.push(formatProviderError("ChatGPT WHAM usage", error));
     }
@@ -560,4 +597,11 @@ export async function getQuotaWindows(): Promise<ProviderQuotaResult> {
     error: errors.join("; "),
     windows: [],
   };
+}
+
+export async function getQuotaWindows(
+  context?: AdapterQuotaContext,
+): Promise<ProviderQuotaResult> {
+  const effectiveCodexHome = await resolveQuotaCodexHome(context?.companyId);
+  return getQuotaWindowsForHome(effectiveCodexHome);
 }

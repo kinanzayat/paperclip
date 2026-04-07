@@ -1,11 +1,11 @@
 export const type = "codex_local";
 export const label = "Codex (local)";
-export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.3-codex";
+export const DEFAULT_CODEX_LOCAL_MODEL = "gpt-5.4";
 export const DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX = true;
 
 export const models = [
-  { id: "gpt-5.4", label: "gpt-5.4" },
   { id: DEFAULT_CODEX_LOCAL_MODEL, label: DEFAULT_CODEX_LOCAL_MODEL },
+  { id: "gpt-5.3-codex", label: "gpt-5.3-codex" },
   { id: "gpt-5.3-codex-spark", label: "gpt-5.3-codex-spark" },
   { id: "gpt-5", label: "gpt-5" },
   { id: "o3", label: "o3" },
@@ -37,6 +37,7 @@ Core fields:
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds
 - graceSec (number, optional): SIGTERM grace period in seconds
+- explicitCommandPath (string, optional): absolute path to codex executable, bypasses PATH resolution and useful on Windows
 
 Notes:
 - Prompts are piped via stdin (Codex receives "-" prompt argument).

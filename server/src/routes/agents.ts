@@ -484,14 +484,14 @@ export function agentRoutes(db: Db) {
     return { ...adapterConfig, devicePrivateKeyPem: generateEd25519PrivateKeyPem() };
   }
 
-  function applyCreateDefaultsByAdapterType(
+  async function applyCreateDefaultsByAdapterType(
     adapterType: string | null | undefined,
     adapterConfig: Record<string, unknown>,
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
     const next = { ...adapterConfig };
     if (adapterType === "codex_local") {
       if (!asNonEmptyString(next.model)) {
-        next.model = DEFAULT_CODEX_LOCAL_MODEL;
+        next.model = (await detectAdapterModel("codex_local"))?.model ?? DEFAULT_CODEX_LOCAL_MODEL;
       }
       const hasBypassFlag =
         typeof next.dangerouslyBypassApprovalsAndSandbox === "boolean" ||
@@ -1308,7 +1308,7 @@ export function agentRoutes(db: Db) {
       ...hireInput
     } = req.body;
     hireInput.adapterType = assertKnownAdapterType(hireInput.adapterType);
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const requestedAdapterConfig = await applyCreateDefaultsByAdapterType(
       hireInput.adapterType,
       ((hireInput.adapterConfig ?? {}) as Record<string, unknown>),
     );
@@ -1473,7 +1473,7 @@ export function agentRoutes(db: Db) {
       ...createInput
     } = req.body;
     createInput.adapterType = assertKnownAdapterType(createInput.adapterType);
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const requestedAdapterConfig = await applyCreateDefaultsByAdapterType(
       createInput.adapterType,
       ((createInput.adapterConfig ?? {}) as Record<string, unknown>),
     );
@@ -1918,7 +1918,7 @@ export function agentRoutes(db: Db) {
           rawEffectiveAdapterConfig,
         );
       }
-      const effectiveAdapterConfig = applyCreateDefaultsByAdapterType(
+      const effectiveAdapterConfig = await applyCreateDefaultsByAdapterType(
         requestedAdapterType,
         rawEffectiveAdapterConfig,
       );
