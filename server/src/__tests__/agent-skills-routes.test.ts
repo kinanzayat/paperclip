@@ -466,6 +466,13 @@ describe("agent skill routes", () => {
       }),
       { entryFile: "AGENTS.md", replaceExisting: false },
     );
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        "AGENTS.md": expect.stringContaining("if the issue is an AgentMail requirement intake or is blocked on requirement approval or clarification"),
+      }),
+      { entryFile: "AGENTS.md", replaceExisting: false },
+    );
   });
 
   it("materializes the bundled default instruction set for non-CEO agents with no prompt template", async () => {
@@ -487,6 +494,37 @@ describe("agent skill routes", () => {
       }),
       expect.objectContaining({
         "AGENTS.md": expect.stringContaining("Keep the work moving until it's done."),
+      }),
+      { entryFile: "AGENTS.md", replaceExisting: false },
+    );
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        "AGENTS.md": expect.stringContaining("If an issue is blocked, awaiting approval, or explicitly waiting on requirement clarification"),
+      }),
+      { entryFile: "AGENTS.md", replaceExisting: false },
+    );
+  });
+
+  it("materializes the bundled Product Analyzer instruction set for product analyzer agents", async () => {
+    const res = await request(createApp())
+      .post("/api/companies/company-1/agents")
+      .send({
+        name: "Product Analyzer",
+        role: "product_analyzer",
+        adapterType: "claude_local",
+        adapterConfig: {},
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "11111111-1111-4111-8111-111111111111",
+        role: "product_analyzer",
+        adapterType: "claude_local",
+      }),
+      expect.objectContaining({
+        "AGENTS.md": expect.stringContaining("You are the Product Analyzer."),
       }),
       { entryFile: "AGENTS.md", replaceExisting: false },
     );

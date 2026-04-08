@@ -8,6 +8,7 @@ import {
   prepareManagedCodexHome,
   readSharedCodexDefaultModel,
   resolveManagedCodexHomeDir,
+  resolveSharedCodexHomeDir,
 } from "./codex-home.js";
 
 const noopLog = async () => {};
@@ -124,5 +125,20 @@ describe("codex home sync", () => {
       provider: "openai",
       source: "paperclip_default",
     });
+  });
+
+  it("resolves managed and shared homes from HOMEDRIVE and HOMEPATH when HOME and USERPROFILE are absent", async () => {
+    const env = {
+      HOMEDRIVE: "C:",
+      HOMEPATH: "\\Users\\Paperclip",
+      PAPERCLIP_INSTANCE_ID: "instance-1",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveManagedCodexHomeDir(env, "company-1")).toBe(
+      path.resolve("C:\\Users\\Paperclip", ".paperclip", "instances", "instance-1", "companies", "company-1", "codex-home"),
+    );
+    expect(resolveSharedCodexHomeDir(env)).toBe(
+      path.resolve("C:\\Users\\Paperclip", ".codex"),
+    );
   });
 });

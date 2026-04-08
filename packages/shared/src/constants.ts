@@ -39,6 +39,7 @@ export const AGENT_ROLES = [
   "cto",
   "cmo",
   "cfo",
+  "product_analyzer",
   "engineer",
   "designer",
   "pm",
@@ -54,6 +55,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   cto: "CTO",
   cmo: "CMO",
   cfo: "CFO",
+  product_analyzer: "Product Analyzer",
   engineer: "Engineer",
   designer: "Designer",
   pm: "PM",
@@ -267,7 +269,12 @@ export const PROJECT_COLORS = [
   "#3b82f6", // blue
 ] as const;
 
-export const APPROVAL_TYPES = ["hire_agent", "approve_ceo_strategy", "budget_override_required"] as const;
+export const APPROVAL_TYPES = [
+  "hire_agent",
+  "approve_ceo_strategy",
+  "budget_override_required",
+  "agentmail_requirement_confirmation",
+] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
 export const APPROVAL_STATUSES = [

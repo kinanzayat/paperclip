@@ -29,9 +29,15 @@ const mockSecretService = vi.hoisted(() => ({
   normalizeHireApprovalPayloadForPersistence: vi.fn(),
 }));
 
+const mockAgentmailService = vi.hoisted(() => ({
+  onApprovalApproved: vi.fn(),
+  onApprovalRejected: vi.fn(),
+}));
+
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/index.js", () => ({
+  agentmailService: () => mockAgentmailService,
   approvalService: () => mockApprovalService,
   heartbeatService: () => mockHeartbeatService,
   issueApprovalService: () => mockIssueApprovalService,

@@ -1,10 +1,11 @@
-import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
+import { UserPlus, Lightbulb, Mail, ShieldAlert, ShieldCheck } from "lucide-react";
 import { formatCents } from "../lib/utils";
 
 export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
   approve_ceo_strategy: "CEO Strategy",
   budget_override_required: "Budget Override",
+  agentmail_requirement_confirmation: "Requirement Confirmation",
 };
 
 /** Build a contextual label for an approval, e.g. "Hire Agent: Designer" */
@@ -20,6 +21,7 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   hire_agent: UserPlus,
   approve_ceo_strategy: Lightbulb,
   budget_override_required: ShieldAlert,
+  agentmail_requirement_confirmation: Mail,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -127,8 +129,43 @@ export function BudgetOverridePayload({ payload }: { payload: Record<string, unk
   );
 }
 
+function RequirementReviewSection({
+  label,
+  value,
+}: {
+  label: string;
+  value: unknown;
+}) {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="rounded-md bg-muted/40 px-3 py-2 text-xs whitespace-pre-wrap">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+export function AgentmailRequirementPayload({ payload }: { payload: Record<string, unknown> }) {
+  return (
+    <div className="mt-3 space-y-2 text-sm">
+      <PayloadField label="Issue" value={payload.issueIdentifier ?? payload.issueTitle} />
+      <PayloadField label="Sender" value={payload.senderEmail} />
+      <PayloadField label="Reply" value={payload.replyActionHint ?? "approve / reject / edit"} />
+      <RequirementReviewSection label="Requested change" value={payload.requestedChange} />
+      <RequirementReviewSection label="Feasible now" value={payload.feasibleNow} />
+      <RequirementReviewSection label="Hard or risky parts" value={payload.hardOrRiskyParts} />
+      <RequirementReviewSection label="Scope cuts and tradeoffs" value={payload.scopeCutsAndTradeoffs} />
+      <RequirementReviewSection label="Recommended requirement" value={payload.recommendedRequirement} />
+      <RequirementReviewSection label="Proposed issue breakdown" value={payload.proposedIssueBreakdown} />
+    </div>
+  );
+}
+
 export function ApprovalPayloadRenderer({ type, payload }: { type: string; payload: Record<string, unknown> }) {
   if (type === "hire_agent") return <HireAgentPayload payload={payload} />;
   if (type === "budget_override_required") return <BudgetOverridePayload payload={payload} />;
+  if (type === "agentmail_requirement_confirmation") return <AgentmailRequirementPayload payload={payload} />;
   return <CeoStrategyPayload payload={payload} />;
 }

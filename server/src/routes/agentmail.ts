@@ -25,21 +25,24 @@ function pickAnalysisAgent(input: {
   availableAgents: Array<{ id: string; name: string; role: string; status: string }>;
 }) {
   if (input.assigneeAgentId) {
-    const assigned = input.availableAgents.find((agent) => agent.id === input.assigneeAgentId);
+    const assigned = input.availableAgents.find(
+      (agent) =>
+        agent.id === input.assigneeAgentId
+        && agent.role === "product_analyzer"
+        && agent.status !== "paused"
+        && agent.status !== "terminated"
+        && agent.status !== "pending_approval",
+    );
     if (assigned) return assigned;
   }
 
-  const active = input.availableAgents.filter((agent) => agent.status !== "paused" && agent.status !== "terminated");
-  const byName = active.find((agent) => agent.name.toLowerCase().includes("product analyzer"));
-  if (byName) return byName;
-
-  const byRole =
-    active.find((agent) => agent.role === "pm")
-    ?? active.find((agent) => agent.role === "researcher")
-    ?? active.find((agent) => agent.role === "engineer")
-    ?? active[0];
-
-  return byRole ?? null;
+  const active = input.availableAgents.filter(
+    (agent) =>
+      agent.status !== "paused"
+      && agent.status !== "terminated"
+      && agent.status !== "pending_approval",
+  );
+  return active.find((agent) => agent.role === "product_analyzer") ?? null;
 }
 
 export function agentmailRoutes(db: Db) {
@@ -98,8 +101,8 @@ export function agentmailRoutes(db: Db) {
                 if (!issue.assigneeAgentId || issue.assigneeAgentId !== selectedAgent.id) {
                   nextPatch.assigneeAgentId = selectedAgent.id;
                 }
-                if (issue.status === "backlog") {
-                  nextPatch.status = "todo";
+                if (issue.status !== "blocked" && issue.status !== "done" && issue.status !== "cancelled") {
+                  nextPatch.status = "blocked";
                 }
                 if (Object.keys(nextPatch).length > 0) {
                   await issues.update(issue.id, nextPatch);
@@ -142,7 +145,30 @@ export function agentmailRoutes(db: Db) {
                   });
                 }
               } else {
-                logger.warn({ companyId, issueId }, "AgentMail webhook processed but no active agent found for analysis wakeup");
+                const nextPatch: { assigneeAgentId?: string | null; status?: string } = {};
+                if (issue.assigneeAgentId) {
+                  nextPatch.assigneeAgentId = null;
+                }
+                if (issue.status !== "backlog" && issue.status !== "done" && issue.status !== "cancelled") {
+                  nextPatch.status = "backlog";
+                }
+                if (Object.keys(nextPatch).length > 0) {
+                  await issues.update(issue.id, nextPatch);
+                }
+                logger.warn({ companyId, issueId }, "AgentMail webhook processed but no Product Analyzer is available");
+                await logActivity(db, {
+                  companyId,
+                  actorType: "system",
+                  actorId: "agentmail",
+                  action: "agentmail.awaiting_analyzer_agent",
+                  entityType: "issue",
+                  entityId: issue.id,
+                  details: {
+                    issueId: issue.id,
+                    messageId: readWebhookMessageId(req.body),
+                    state: "awaiting_analyzer_agent",
+                  },
+                });
               }
             }
           } catch (err) {

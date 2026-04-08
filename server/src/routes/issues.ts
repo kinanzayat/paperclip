@@ -30,6 +30,7 @@ import type { StorageService } from "../storage/types.js";
 import { validate } from "../middleware/validate.js";
 import {
   accessService,
+  agentmailService,
   agentService,
   companyStatusService,
   executionWorkspaceService,
@@ -74,6 +75,7 @@ export function issueRoutes(
   const router = Router();
   const svc = issueService(db);
   const access = accessService(db);
+  const agentmail = agentmailService(db);
   const statusesSvc = companyStatusService(db);
   const heartbeat = heartbeatService(db);
   const feedback = feedbackService(db);
@@ -258,6 +260,27 @@ export function issueRoutes(
     const workspace = await executionWorkspacesSvc.getById(issue.executionWorkspaceId);
     if (!workspace || !isClosedIsolatedExecutionWorkspace(workspace)) return null;
     return workspace;
+  }
+
+  async function maybeHandleAgentmailRequirementReviewComment(input: {
+    issueId: string;
+    commentId: string;
+    commentBody: string;
+    actorAgentId: string | null;
+  }) {
+    if (!input.actorAgentId) return;
+    const body = input.commentBody.trim();
+    if (!body.includes("<!-- paperclip:agentmail-requirement-review -->")) return;
+    try {
+      await agentmail.handleRequirementReviewComment({
+        issueId: input.issueId,
+        commentId: input.commentId,
+        commentBody: input.commentBody,
+        authorAgentId: input.actorAgentId,
+      });
+    } catch (err) {
+      logger.warn({ err, issueId: input.issueId, commentId: input.commentId }, "AgentMail requirement review handling failed");
+    }
   }
 
   function respondClosedIssueExecutionWorkspace(
@@ -1310,6 +1333,13 @@ export function issueRoutes(
         },
       });
 
+      await maybeHandleAgentmailRequirementReviewComment({
+        issueId: issue.id,
+        commentId: comment.id,
+        commentBody,
+        actorAgentId: actor.agentId ?? null,
+      });
+
     }
 
     const assigneeChanged = assigneeWillChange;
@@ -1798,6 +1828,13 @@ export function issueRoutes(
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
         ...(interruptedRunId ? { interruptedRunId } : {}),
       },
+    });
+
+    await maybeHandleAgentmailRequirementReviewComment({
+      issueId: currentIssue.id,
+      commentId: comment.id,
+      commentBody: req.body.body,
+      actorAgentId: actor.agentId ?? null,
     });
 
     // Merge all wakeups from this comment into one enqueue per agent to avoid duplicate runs.

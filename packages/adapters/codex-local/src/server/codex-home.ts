@@ -19,7 +19,16 @@ function nonEmpty(value: string | undefined): string | null {
 }
 
 function resolveUserHome(env: NodeJS.ProcessEnv = process.env): string {
-  return nonEmpty(env.HOME) ?? nonEmpty(env.USERPROFILE) ?? os.homedir();
+  const directHome = nonEmpty(env.HOME) ?? nonEmpty(env.USERPROFILE);
+  if (directHome) return directHome;
+
+  const homeDrive = nonEmpty(env.HOMEDRIVE);
+  const homePath = nonEmpty(env.HOMEPATH);
+  if (homeDrive && homePath) {
+    return path.resolve(`${homeDrive}${homePath}`);
+  }
+
+  return os.homedir();
 }
 
 export async function pathExists(candidate: string): Promise<boolean> {

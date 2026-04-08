@@ -684,6 +684,11 @@ export function IssueDetail() {
     };
   }, [activity]);
 
+  const agentmailRequirementApproval = useMemo(
+    () => linkedApprovals?.find((approval) => approval.type === "agentmail_requirement_confirmation") ?? null,
+    [linkedApprovals],
+  );
+
   const issueCostSummary = useMemo(() => {
     let input = 0;
     let output = 0;
@@ -1638,6 +1643,11 @@ export function IssueDetail() {
             <div>
               Outbound summary: <span className="text-foreground">{agentmailMeta.outboundStatus ?? "unknown"}</span>
             </div>
+            {agentmailRequirementApproval && (
+              <div>
+                Requirement approval: <span className="text-foreground">{agentmailRequirementApproval.status}</span>
+              </div>
+            )}
             <div className="sm:col-span-2">
               Processed {relativeTime(agentmailMeta.createdAt)}
               {agentmailMeta.projectReference ? ` (requested: ${agentmailMeta.projectReference})` : ""}

@@ -240,6 +240,8 @@ fetch('/api/companies').then(r => r.json()).then(console.table)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\agentmail-webhook-url.ps1 -CompanyId "<YOUR_COMPANY_ID>" -UpdateEnv
+
+powershell -ExecutionPolicy Bypass -File .\scripts\agentmail-webhook-url.ps1 -CompanyId "1ec0b6dd-9e1d-4fd5-9b0d-37324447b928" -UpdateEnv
 ```
 
 ### Linux (PowerShell Core)

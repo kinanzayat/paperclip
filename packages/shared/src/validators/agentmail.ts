@@ -19,6 +19,7 @@ export const agentmailRequirementsSchema = z.object({
 export const agentmailMessageSchema = z.object({
   messageId: z.string().min(1),
   threadId: z.string().optional().nullable(),
+  inReplyTo: z.string().optional().nullable(),
   subject: z.string().optional().nullable(),
   from: z.object({
     email: z.string().min(1),

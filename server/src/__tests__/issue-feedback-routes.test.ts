@@ -80,6 +80,9 @@ vi.mock("../services/index.js", () => ({
     canUser: vi.fn(),
     hasPermission: vi.fn(),
   }),
+  agentmailService: () => ({
+    handleRequirementReviewComment: vi.fn(async () => ({ status: "ignored" })),
+  }),
   agentService: () => ({
     getById: vi.fn(),
   }),

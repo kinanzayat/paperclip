@@ -6,6 +6,7 @@ import { errorHandler } from "../middleware/index.js";
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
+  list: vi.fn(),
   update: vi.fn(),
   resolveByReference: vi.fn(),
 }));
@@ -149,6 +150,7 @@ describe("agent instructions bundle routes", () => {
     vi.clearAllMocks();
     mockDetectAdapterModel.mockResolvedValue(null);
     mockAgentService.getById.mockResolvedValue(makeAgent());
+    mockAgentService.list.mockResolvedValue([makeAgent()]);
     mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...makeAgent(),
       adapterConfig: patch.adapterConfig ?? {},
@@ -221,6 +223,112 @@ describe("agent instructions bundle routes", () => {
       entryFile: "AGENTS.md",
     });
     expect(mockAgentInstructionsService.getBundle).toHaveBeenCalled();
+  });
+
+  it("resyncs default managed instruction bundles for eligible company agents", async () => {
+    const ceoAgent = {
+      ...makeAgent(),
+      id: "agent-ceo",
+      name: "CEO",
+      role: "ceo",
+    };
+    const externalAgent = {
+      ...makeAgent(),
+      id: "agent-external",
+      name: "External",
+      role: "engineer",
+      adapterConfig: {
+        instructionsBundleMode: "external",
+        instructionsRootPath: "/custom/instructions",
+        instructionsEntryFile: "AGENTS.md",
+        instructionsFilePath: "/custom/instructions/AGENTS.md",
+      },
+    };
+    const unsupportedAgent = {
+      ...makeAgent(),
+      id: "agent-remote",
+      name: "Remote",
+      role: "engineer",
+      adapterType: "remote_adapter",
+    };
+
+    mockAgentService.list.mockResolvedValue([ceoAgent, externalAgent, unsupportedAgent]);
+    mockAgentInstructionsService.getBundle.mockImplementation(async (agent: { id: string }) => ({
+      agentId: agent.id,
+      companyId: "company-1",
+      mode: agent.id === "agent-external" ? "external" : "managed",
+      rootPath: "/tmp/agent-1",
+      managedRootPath: "/tmp/agent-1",
+      entryFile: "AGENTS.md",
+      resolvedEntryPath: "/tmp/agent-1/AGENTS.md",
+      editable: true,
+      warnings: [],
+      legacyPromptTemplateActive: false,
+      legacyBootstrapPromptTemplateActive: false,
+      files: [],
+    }));
+    mockAgentInstructionsService.materializeManagedBundle.mockResolvedValue({
+      bundle: null,
+      adapterConfig: {
+        instructionsBundleMode: "managed",
+        instructionsRootPath: "/tmp/agent-ceo",
+        instructionsEntryFile: "AGENTS.md",
+        instructionsFilePath: "/tmp/agent-ceo/AGENTS.md",
+      },
+    });
+
+    const res = await request(createApp())
+      .post("/api/companies/company-1/agents/resync-default-instructions");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledTimes(1);
+    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "agent-ceo",
+        role: "ceo",
+      }),
+      expect.objectContaining({
+        "AGENTS.md": expect.stringContaining("You are the CEO."),
+      }),
+      {
+        entryFile: "AGENTS.md",
+        replaceExisting: true,
+        clearLegacyPromptTemplate: true,
+      },
+    );
+    expect(mockAgentService.update).toHaveBeenCalledWith(
+      "agent-ceo",
+      expect.objectContaining({
+        adapterConfig: expect.objectContaining({
+          instructionsBundleMode: "managed",
+          instructionsRootPath: "/tmp/agent-ceo",
+          instructionsEntryFile: "AGENTS.md",
+          instructionsFilePath: "/tmp/agent-ceo/AGENTS.md",
+        }),
+      }),
+      expect.objectContaining({
+        recordRevision: expect.objectContaining({
+          source: "default_instructions_resync",
+        }),
+      }),
+    );
+    expect(res.body.updated).toEqual([
+      expect.objectContaining({
+        id: "agent-ceo",
+        role: "ceo",
+        bundleModeBefore: "managed",
+      }),
+    ]);
+    expect(res.body.skipped).toEqual([
+      expect.objectContaining({
+        id: "agent-external",
+        reason: "external_bundle",
+      }),
+      expect.objectContaining({
+        id: "agent-remote",
+        reason: "unsupported_adapter",
+      }),
+    ]);
   });
 
   it("writes a bundle file and persists compatibility config", async () => {

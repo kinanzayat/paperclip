@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import type { Agent } from "@paperclipai/shared";
 import {
+  ensurePaperclipSkillSymlink,
   removeMaintainerOnlySkillSymlinks,
   resolvePaperclipSkillsDir,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -45,15 +46,28 @@ interface SkillsInstallSummary {
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
+function resolveUserHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  const directHome = env.HOME?.trim() || env.USERPROFILE?.trim();
+  if (directHome) return path.resolve(directHome);
+
+  const homeDrive = env.HOMEDRIVE?.trim();
+  const homePath = env.HOMEPATH?.trim();
+  if (homeDrive && homePath) {
+    return path.resolve(`${homeDrive}${homePath}`);
+  }
+
+  return os.homedir();
+}
+
 function codexSkillsHome(): string {
   const fromEnv = process.env.CODEX_HOME?.trim();
-  const base = fromEnv && fromEnv.length > 0 ? fromEnv : path.join(os.homedir(), ".codex");
+  const base = fromEnv && fromEnv.length > 0 ? fromEnv : path.join(resolveUserHomeDir(), ".codex");
   return path.join(base, "skills");
 }
 
 function claudeSkillsHome(): string {
   const fromEnv = process.env.CLAUDE_HOME?.trim();
-  const base = fromEnv && fromEnv.length > 0 ? fromEnv : path.join(os.homedir(), ".claude");
+  const base = fromEnv && fromEnv.length > 0 ? fromEnv : path.join(resolveUserHomeDir(), ".claude");
   return path.join(base, "skills");
 }
 
@@ -81,55 +95,13 @@ async function installSkillsForTarget(
     if (!entry.isDirectory()) continue;
     const source = path.join(sourceSkillsDir, entry.name);
     const target = path.join(targetSkillsDir, entry.name);
-    const existing = await fs.lstat(target).catch(() => null);
-    if (existing) {
-      if (existing.isSymbolicLink()) {
-        let linkedPath: string | null = null;
-        try {
-          linkedPath = await fs.readlink(target);
-        } catch (err) {
-          await fs.unlink(target);
-          try {
-            await fs.symlink(source, target);
-            summary.linked.push(entry.name);
-            continue;
-          } catch (linkErr) {
-            summary.failed.push({
-              name: entry.name,
-              error:
-                err instanceof Error && linkErr instanceof Error
-                  ? `${err.message}; then ${linkErr.message}`
-                  : err instanceof Error
-                    ? err.message
-                    : `Failed to recover broken symlink: ${String(err)}`,
-            });
-            continue;
-          }
-        }
-
-        const resolvedLinkedPath = path.isAbsolute(linkedPath)
-          ? linkedPath
-          : path.resolve(path.dirname(target), linkedPath);
-        const linkedTargetExists = await fs
-          .stat(resolvedLinkedPath)
-          .then(() => true)
-          .catch(() => false);
-
-        if (!linkedTargetExists) {
-          await fs.unlink(target);
-        } else {
-          summary.skipped.push(entry.name);
-          continue;
-        }
-      } else {
-        summary.skipped.push(entry.name);
-        continue;
-      }
-    }
-
     try {
-      await fs.symlink(source, target);
-      summary.linked.push(entry.name);
+      const result = await ensurePaperclipSkillSymlink(source, target);
+      if (result === "skipped") {
+        summary.skipped.push(entry.name);
+      } else {
+        summary.linked.push(entry.name);
+      }
     } catch (err) {
       summary.failed.push({
         name: entry.name,
@@ -141,19 +113,44 @@ async function installSkillsForTarget(
   return summary;
 }
 
-function buildAgentEnvExports(input: {
+type AgentEnvShell = "posix" | "powershell" | "cmd";
+
+function quoteForPosix(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function quoteForPowerShell(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+export function buildAgentEnvExports(input: {
   apiBase: string;
   companyId: string;
   agentId: string;
   apiKey: string;
-}): string {
-  const escaped = (value: string) => value.replace(/'/g, "'\"'\"'");
-  return [
-    `export PAPERCLIP_API_URL='${escaped(input.apiBase)}'`,
-    `export PAPERCLIP_COMPANY_ID='${escaped(input.companyId)}'`,
-    `export PAPERCLIP_AGENT_ID='${escaped(input.agentId)}'`,
-    `export PAPERCLIP_API_KEY='${escaped(input.apiKey)}'`,
-  ].join("\n");
+}, shell: AgentEnvShell = process.platform === "win32" ? "powershell" : "posix"): string {
+  const entries = [
+    ["PAPERCLIP_API_URL", input.apiBase],
+    ["PAPERCLIP_COMPANY_ID", input.companyId],
+    ["PAPERCLIP_AGENT_ID", input.agentId],
+    ["PAPERCLIP_API_KEY", input.apiKey],
+  ] as const;
+
+  if (shell === "powershell") {
+    return entries
+      .map(([key, value]) => `$env:${key}=${quoteForPowerShell(value)}`)
+      .join("\n");
+  }
+
+  if (shell === "cmd") {
+    return entries
+      .map(([key, value]) => `set "${key}=${value.replace(/"/g, '""')}"`)
+      .join("\n");
+  }
+
+  return entries
+    .map(([key, value]) => `export ${key}=${quoteForPosix(value)}`)
+    .join("\n");
 }
 
 export function registerAgentCommands(program: Command): void {
@@ -261,12 +258,27 @@ export function registerAgentCommands(program: Command): void {
             );
           }
 
-          const exportsText = buildAgentEnvExports({
-            apiBase: ctx.api.apiBase,
-            companyId: agentRow.companyId,
-            agentId: agentRow.id,
-            apiKey: key.token,
-          });
+          const shellExports = {
+            posix: buildAgentEnvExports({
+              apiBase: ctx.api.apiBase,
+              companyId: agentRow.companyId,
+              agentId: agentRow.id,
+              apiKey: key.token,
+            }, "posix"),
+            powershell: buildAgentEnvExports({
+              apiBase: ctx.api.apiBase,
+              companyId: agentRow.companyId,
+              agentId: agentRow.id,
+              apiKey: key.token,
+            }, "powershell"),
+            cmd: buildAgentEnvExports({
+              apiBase: ctx.api.apiBase,
+              companyId: agentRow.companyId,
+              agentId: agentRow.id,
+              apiKey: key.token,
+            }, "cmd"),
+          };
+          const exportsText = process.platform === "win32" ? shellExports.powershell : shellExports.posix;
 
           if (ctx.json) {
             printOutput(
@@ -285,6 +297,7 @@ export function registerAgentCommands(program: Command): void {
                 },
                 skills: installSummaries,
                 exports: exportsText,
+                shellExports,
               },
               { json: true },
             );
@@ -305,7 +318,15 @@ export function registerAgentCommands(program: Command): void {
           }
           console.log("");
           console.log("# Run this in your shell before launching codex/claude:");
+          if (process.platform === "win32") {
+            console.log("# PowerShell");
+          }
           console.log(exportsText);
+          if (process.platform === "win32") {
+            console.log("");
+            console.log("# cmd.exe");
+            console.log(shellExports.cmd);
+          }
         } catch (err) {
           handleCommandError(err);
         }

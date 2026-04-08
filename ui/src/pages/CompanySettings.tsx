@@ -595,7 +595,7 @@ export function CompanySettings() {
           </Field>
           <Field
             label="Product analyzer email"
-            hint="AgentMail summary emails will be sent to this address for this company."
+            hint="AgentMail requirement confirmation emails will be sent to this address for this company."
           >
             <input
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"

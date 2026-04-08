@@ -12,12 +12,43 @@ const mockAgentmailService = vi.hoisted(() => ({
   processWebhook: vi.fn(),
 }));
 
+const mockIssueService = vi.hoisted(() => ({
+  getById: vi.fn(),
+  update: vi.fn(),
+}));
+
+const mockAgentService = vi.hoisted(() => ({
+  list: vi.fn(),
+}));
+
+const mockHeartbeatService = vi.hoisted(() => ({
+  wakeup: vi.fn(),
+}));
+
+const mockLogActivity = vi.hoisted(() => vi.fn());
+
 vi.mock("../services/companies.js", () => ({
   companyService: () => mockCompanyService,
 }));
 
 vi.mock("../services/agentmail.js", () => ({
   agentmailService: () => mockAgentmailService,
+}));
+
+vi.mock("../services/issues.js", () => ({
+  issueService: () => mockIssueService,
+}));
+
+vi.mock("../services/agents.js", () => ({
+  agentService: () => mockAgentService,
+}));
+
+vi.mock("../services/heartbeat.js", () => ({
+  heartbeatService: () => mockHeartbeatService,
+}));
+
+vi.mock("../services/activity-log.js", () => ({
+  logActivity: mockLogActivity,
 }));
 
 function createApp() {
@@ -32,6 +63,10 @@ describe("AgentMail webhook routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.PAPERCLIP_AGENTMAIL_WEBHOOK_SECRET = "test-secret-123";
+    mockIssueService.getById.mockResolvedValue(null);
+    mockIssueService.update.mockResolvedValue(null);
+    mockAgentService.list.mockResolvedValue([]);
+    mockHeartbeatService.wakeup.mockResolvedValue({ id: "run-1" });
   });
 
   it("rejects webhook without secret when secret is configured", async () => {
@@ -109,6 +144,100 @@ describe("AgentMail webhook routes", () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.status).toBe("processed");
     expect(mockAgentmailService.processWebhook).toHaveBeenCalled();
+  });
+
+  it("does not wake CEO or CTO when no Product Analyzer exists", async () => {
+    mockCompanyService.getById.mockResolvedValue({
+      id: "company-1",
+      name: "Test Company",
+    });
+    mockAgentmailService.processWebhook.mockResolvedValue({
+      status: "processed",
+      issueId: "issue-1",
+      subIssueCount: 0,
+    });
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-1",
+      companyId: "company-1",
+      status: "in_progress",
+      assigneeAgentId: "ceo-1",
+    });
+    mockAgentService.list.mockResolvedValue([
+      { id: "ceo-1", name: "CEO", role: "ceo", status: "active" },
+      { id: "cto-1", name: "CTO", role: "cto", status: "active" },
+    ]);
+
+    const res = await request(createApp())
+      .post("/api/companies/company-1/webhooks/agentmail")
+      .set("x-agentmail-webhook-secret", "test-secret-123")
+      .send({
+        event_type: "message.received",
+        message: {
+          messageId: "msg-no-analyzer",
+          subject: "Need gated requirement review",
+          from: { email: "sender@example.com" },
+          to: ["recipient@example.com"],
+          text: "Please review first",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysisAgentId).toBeNull();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+    expect(mockIssueService.update).toHaveBeenCalledWith("issue-1", {
+      assigneeAgentId: null,
+      status: "backlog",
+    });
+  });
+
+  it("wakes only the Product Analyzer and blocks the issue until approval", async () => {
+    mockCompanyService.getById.mockResolvedValue({
+      id: "company-1",
+      name: "Test Company",
+    });
+    mockAgentmailService.processWebhook.mockResolvedValue({
+      status: "processed",
+      issueId: "issue-1",
+      subIssueCount: 0,
+    });
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-1",
+      companyId: "company-1",
+      status: "backlog",
+      assigneeAgentId: null,
+    });
+    mockAgentService.list.mockResolvedValue([
+      { id: "ceo-1", name: "CEO", role: "ceo", status: "active" },
+      { id: "pa-1", name: "Product Analyzer", role: "product_analyzer", status: "idle" },
+    ]);
+    mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
+
+    const res = await request(createApp())
+      .post("/api/companies/company-1/webhooks/agentmail")
+      .set("x-agentmail-webhook-secret", "test-secret-123")
+      .send({
+        event_type: "message.received",
+        message: {
+          messageId: "msg-analyzer",
+          subject: "Need requirement review",
+          from: { email: "sender@example.com" },
+          to: ["recipient@example.com"],
+          text: "Analyze this before implementation",
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysisAgentId).toBe("pa-1");
+    expect(mockIssueService.update).toHaveBeenCalledWith("issue-1", {
+      assigneeAgentId: "pa-1",
+      status: "blocked",
+    });
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      "pa-1",
+      expect.objectContaining({
+        reason: "agentmail_requirement_analysis",
+      }),
+    );
   });
 
   it("rejects webhook for non-existent company", async () => {

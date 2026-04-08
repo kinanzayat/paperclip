@@ -10,6 +10,7 @@ import {
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
+  agentmailService,
   approvalService,
   heartbeatService,
   issueApprovalService,
@@ -29,6 +30,7 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
 export function approvalRoutes(db: Db) {
   const router = Router();
   const svc = approvalService(db);
+  const agentmail = agentmailService(db);
   const heartbeat = heartbeatService(db);
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
@@ -146,7 +148,14 @@ export function approvalRoutes(db: Db) {
         },
       });
 
-      if (approval.requestedByAgentId) {
+      if (approval.type === "agentmail_requirement_confirmation") {
+        await agentmail.onApprovalApproved({
+          approvalId: approval.id,
+          actorType: "user",
+          actorId: req.actor.userId ?? "board",
+          note: req.body.decisionNote ?? null,
+        });
+      } else if (approval.requestedByAgentId) {
         try {
           const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
             source: "automation",
@@ -223,6 +232,15 @@ export function approvalRoutes(db: Db) {
     );
 
     if (applied) {
+      if (approval.type === "agentmail_requirement_confirmation") {
+        await agentmail.onApprovalRejected({
+          approvalId: approval.id,
+          actorType: "user",
+          actorId: req.actor.userId ?? "board",
+          note: req.body.decisionNote ?? null,
+          action: "reject",
+        });
+      }
       await logActivity(db, {
         companyId: approval.companyId,
         actorType: "user",
@@ -248,6 +266,16 @@ export function approvalRoutes(db: Db) {
         req.body.decidedByUserId ?? "board",
         req.body.decisionNote,
       );
+
+      if (approval.type === "agentmail_requirement_confirmation") {
+        await agentmail.onApprovalRejected({
+          approvalId: approval.id,
+          actorType: "user",
+          actorId: req.actor.userId ?? "board",
+          note: req.body.decisionNote ?? null,
+          action: "edit",
+        });
+      }
 
       await logActivity(db, {
         companyId: approval.companyId,

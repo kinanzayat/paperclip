@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { agentmailService, buildAnalyzerBody, buildRequirementPacket, getWebhookEventType } from "../services/agentmail.js";
+import {
+  agentmailService,
+  buildAnalyzerBody,
+  buildRequirementPacket,
+  getWebhookEventType,
+  parseRequirementReviewComment,
+  resolveRequirementReplyAction,
+} from "../services/agentmail.js";
 
 describe("agentmail helpers", () => {
   it("identifies blocked webhook events", () => {
@@ -56,8 +63,8 @@ describe("agentmail helpers", () => {
         targetIssueIdentifier: "PAP-17",
       },
       resolvedProject: { id: "project-1", name: "HR" },
-      createdSubIssueTitles: ["add approval reply"],
-      updatedSubIssueTitles: ["update issue description"],
+      createdSubIssueTitles: [],
+      updatedSubIssueTitles: [],
     });
 
     expect(packet).toContain("# Email Intake");
@@ -66,31 +73,86 @@ describe("agentmail helpers", () => {
     expect(packet).toContain("## Requirements");
     expect(packet).toContain("1. add approval reply");
     expect(packet).toContain("2. update issue description");
-    expect(packet).toContain("## Created sub-issues");
-    expect(packet).toContain("## Updated sub-issues");
     expect(packet).toContain("PAP-17");
+    expect(packet).toContain("Product Analyzer review and email confirmation are required");
+    expect(packet).toContain("Implementation sub-issues are intentionally deferred until the requirement is approved.");
   });
 
-  it("builds a plain-text markdown approval reply", () => {
+  it("builds a plain-text markdown requirement confirmation email", () => {
     const body = buildAnalyzerBody({
       issueIdentifier: "PAP-17",
       issueTitle: "Build the approval loop",
-      summary: "Analyze the email and update the issue tree.",
-      subIssueTitles: ["add approval reply", "update issue description"],
-      createdSubIssueTitles: ["add approval reply"],
-      updatedSubIssueTitles: ["update issue description"],
       sourceMessageId: "msg-1",
       projectName: "HR",
       senderEmail: "sender@example.com",
+      review: {
+        requestedChange: "Tighten the requirement before implementation starts.",
+        feasibleNow: "We can add a Product Analyzer gate with approval emails.",
+        hardOrRiskyParts: "Current routing falls back to CEO and CTO.",
+        scopeCutsAndTradeoffs: "Use approval entities instead of new issue statuses.",
+        recommendedRequirement: "Analyze first, then send approve/reject/edit email.",
+        proposedIssueBreakdown: "1. Gate routing\n2. Send review email\n3. Start implementation after approval",
+      },
     });
 
-    expect(body).toContain("**AgentMail analysis for PAP-17**");
+    expect(body).toContain("**Requirement review for PAP-17**");
+    expect(body).toContain("## Requested Change");
+    expect(body).toContain("## Recommended Requirement");
     expect(body).toContain("## Reply with one of the following");
     expect(body).toContain("- approve");
     expect(body).toContain("- reject");
-    expect(body).toContain("- clarify");
-    expect(body).toContain("## Created this round");
-    expect(body).toContain("## Updated this round");
+    expect(body).toContain("- edit");
+  });
+
+  it("parses the analyzer requirement review template", () => {
+    const parsed = parseRequirementReviewComment(`
+<!-- paperclip:agentmail-requirement-review -->
+## Requested Change
+Refine the raw email into an implementation-ready requirement.
+
+## Feasible Now
+We can inspect the current routing and approval plumbing.
+
+## Hard Or Risky Parts
+The current flow wakes CEO and CTO too early.
+
+## Scope Cuts And Tradeoffs
+Use approvals and blocked/todo instead of inventing new statuses.
+
+## Recommended Requirement
+Require Product Analyzer review and email confirmation before implementation.
+
+## Proposed Issue Breakdown
+1. Analyzer gate
+2. Email confirmation
+3. Approved handoff
+`);
+
+    expect(parsed).toEqual({
+      requestedChange: "Refine the raw email into an implementation-ready requirement.",
+      feasibleNow: "We can inspect the current routing and approval plumbing.",
+      hardOrRiskyParts: "The current flow wakes CEO and CTO too early.",
+      scopeCutsAndTradeoffs: "Use approvals and blocked/todo instead of inventing new statuses.",
+      recommendedRequirement: "Require Product Analyzer review and email confirmation before implementation.",
+      proposedIssueBreakdown: "1. Analyzer gate\n2. Email confirmation\n3. Approved handoff",
+    });
+  });
+
+  it("treats freeform reply text as an edit request in a requirement approval thread", () => {
+    const action = resolveRequirementReplyAction({
+      messageId: "msg-1",
+      subject: "Re: PAP-17 requirement confirmation",
+      from: { email: "analyzer@example.com" },
+      to: ["product@example.com"],
+      cc: [],
+      textBody: "Please change the requirement so the CTO only starts after approval.",
+      htmlBody: null,
+      receivedAt: null,
+      fireflies: null,
+      requirements: null,
+    } as any, { assumeEditOnFreeformReply: true });
+
+    expect(action).toBe("edit");
   });
 });
 

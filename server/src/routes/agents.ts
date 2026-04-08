@@ -590,6 +590,42 @@ export function agentRoutes(db: Db) {
     return (updated as T | null) ?? { ...agent, adapterConfig: nextAdapterConfig };
   }
 
+  async function prepareDefaultInstructionsBundleResync<T extends {
+    id: string;
+    companyId: string;
+    name: string;
+    role: string;
+    adapterType: string;
+    adapterConfig: unknown;
+  }>(agent: T): Promise<{
+    bundleMode: "managed" | "external" | null;
+    files: Record<string, string> | null;
+    skippedReason: "unsupported_adapter" | "external_bundle" | null;
+  }> {
+    if (!DEFAULT_MANAGED_INSTRUCTIONS_ADAPTER_TYPES.has(agent.adapterType)) {
+      return {
+        bundleMode: null,
+        files: null,
+        skippedReason: "unsupported_adapter",
+      };
+    }
+
+    const bundle = await instructions.getBundle(agent);
+    if (bundle.mode === "external") {
+      return {
+        bundleMode: bundle.mode,
+        files: null,
+        skippedReason: "external_bundle",
+      };
+    }
+
+    return {
+      bundleMode: bundle.mode,
+      files: await loadDefaultAgentInstructionsBundle(resolveDefaultAgentInstructionsBundleRole(agent.role)),
+      skippedReason: null,
+    };
+  }
+
   async function assertCanManageInstructionsPath(req: Request, targetAgent: { id: string; companyId: string }) {
     assertCompanyAccess(req, targetAgent.companyId);
     if (req.actor.type === "board") return;
@@ -1679,6 +1715,94 @@ export function agentRoutes(db: Db) {
       adapterType: agent.adapterType,
       adapterConfigKey,
       path: pathValue,
+    });
+  });
+
+  router.post("/companies/:companyId/agents/resync-default-instructions", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    await assertBoardCompanyAdmin(req, companyId);
+
+    const companyAgents = await svc.list(companyId);
+    const actor = getActorInfo(req);
+    const updated: Array<{
+      id: string;
+      name: string;
+      role: string;
+      adapterType: string;
+      bundleModeBefore: "managed" | "external" | null;
+    }> = [];
+    const skipped: Array<{
+      id: string;
+      name: string;
+      role: string;
+      adapterType: string;
+      reason: "unsupported_adapter" | "external_bundle";
+    }> = [];
+
+    for (const agent of companyAgents) {
+      const prepared = await prepareDefaultInstructionsBundleResync(agent);
+      if (!prepared.files || prepared.skippedReason) {
+        skipped.push({
+          id: agent.id,
+          name: agent.name,
+          role: agent.role,
+          adapterType: agent.adapterType,
+          reason: prepared.skippedReason ?? "unsupported_adapter",
+        });
+        continue;
+      }
+
+      const materialized = await instructions.materializeManagedBundle(agent, prepared.files, {
+        entryFile: "AGENTS.md",
+        replaceExisting: true,
+        clearLegacyPromptTemplate: true,
+      });
+      const nextAdapterConfig = { ...materialized.adapterConfig };
+      delete nextAdapterConfig.promptTemplate;
+      const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
+        agent.companyId,
+        nextAdapterConfig,
+        { strictMode: strictSecretsMode },
+      );
+      await svc.update(
+        agent.id,
+        { adapterConfig: normalizedAdapterConfig },
+        {
+          recordRevision: {
+            createdByAgentId: actor.agentId,
+            createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+            source: "default_instructions_resync",
+          },
+        },
+      );
+      updated.push({
+        id: agent.id,
+        name: agent.name,
+        role: agent.role,
+        adapterType: agent.adapterType,
+        bundleModeBefore: prepared.bundleMode,
+      });
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "agent.default_instructions_resynced",
+        entityType: "agent",
+        entityId: agent.id,
+        details: {
+          role: agent.role,
+          adapterType: agent.adapterType,
+          bundleModeBefore: prepared.bundleMode,
+        },
+      });
+    }
+
+    res.json({
+      companyId,
+      updated,
+      skipped,
     });
   });
 
