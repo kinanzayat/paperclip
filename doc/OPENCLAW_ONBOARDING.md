@@ -47,9 +47,23 @@ curl -sS -H "Cookie: $PAPERCLIP_COOKIE" "http://127.0.0.1:3100/api/agents/$AGENT
 ```
 - Expected: `adapterType=openclaw_gateway`, `tokenLen >= 16`, `hasDeviceKey=true`, and `disableDeviceAuth=false`.
 
+Public WSS fallback:
+- If Paperclip and OpenClaw run on different machines and the private Tailscale path fails, expose the OpenClaw gateway through a public TLS endpoint instead of continuing to debug the tailnet path.
+- Recommended stable path:
+  - create a dedicated subdomain such as `openclaw.zentraid.com` in cPanel
+  - do not use the cPanel Redirects page for this domain; you need a reverse proxy, not a 301/302 redirect
+  - on the Linux OpenClaw host, keep the gateway bound to `127.0.0.1:18789`
+  - set `openclaw config set gateway.remote.url "wss://openclaw.zentraid.com"`
+  - add an Apache SSL reverse proxy from `https://openclaw.zentraid.com` to `http://127.0.0.1:18789`
+  - use `wss://openclaw.zentraid.com/` in the Paperclip agent config
+- Keep the existing `x-openclaw-token` and `devicePrivateKeyPem` unchanged when switching transport paths.
+- Quick `trycloudflare.com` tunnels are still acceptable as a temporary test path, but they are not stable enough for normal operation because the hostname changes whenever the tunnel restarts.
+
 Pairing handshake note:
 - Clean run expectation: first task should succeed without manual pairing commands.
 - The adapter attempts one automatic pairing approval + retry on first `pairing required` (when shared gateway auth token/password is valid).
+- The adapter also attempts one automatic compatibility retry if the gateway rejects the root `paperclip` request field with `invalid agent params ... unexpected property 'paperclip'`.
+- On that retry, Paperclip keeps the same message/session/idempotency values and reconnects once without the root `paperclip` field. The wake payload still remains embedded in the message text.
 - If auto-pair cannot complete (for example token mismatch or no pending request), the first gateway run may still return `pairing required`.
 - This is a separate approval from Paperclip invite approval. You must approve the pending device in OpenClaw itself.
 - Approve it in OpenClaw, then retry the task.

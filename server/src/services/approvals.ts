@@ -78,6 +78,29 @@ export function approvalService(db: Db) {
     );
   }
 
+  async function cancelApproval(id: string, decisionNote?: string | null) {
+    const existing = await getExistingApproval(id);
+    if (!canResolveStatuses.has(existing.status)) {
+      if (existing.status === "cancelled") return existing;
+      throw unprocessable("Only pending or revision requested approvals can be cancelled");
+    }
+
+    const now = new Date();
+    const updated = await db
+      .update(approvals)
+      .set({
+        status: "cancelled",
+        decisionNote: decisionNote ?? existing.decisionNote ?? null,
+        updatedAt: now,
+      })
+      .where(and(eq(approvals.id, id), inArray(approvals.status, resolvableStatuses)))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+
+    if (updated) return updated;
+    return getExistingApproval(id);
+  }
+
   return {
     list: (companyId: string, status?: string) => {
       const conditions = [eq(approvals.companyId, companyId)];
@@ -229,6 +252,22 @@ export function approvalService(db: Db) {
         .returning()
         .then((rows) => rows[0]);
     },
+
+    updatePayload: async (id: string, payload: Record<string, unknown>) => {
+      const existing = await getExistingApproval(id);
+      const now = new Date();
+      return db
+        .update(approvals)
+        .set({
+          payload,
+          updatedAt: now,
+        })
+        .where(eq(approvals.id, id))
+        .returning()
+        .then((rows) => rows[0] ?? existing);
+    },
+
+    cancel: cancelApproval,
 
     listComments: async (approvalId: string) => {
       const existing = await getExistingApproval(approvalId);

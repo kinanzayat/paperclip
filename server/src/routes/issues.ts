@@ -270,7 +270,7 @@ export function issueRoutes(
   }) {
     if (!input.actorAgentId) return;
     const body = input.commentBody.trim();
-    if (!body.includes("<!-- paperclip:agentmail-requirement-review -->")) return;
+    if (!body.includes("<!-- paperclip:agentmail-")) return;
     try {
       await agentmail.handleRequirementReviewComment({
         issueId: input.issueId,

@@ -274,6 +274,8 @@ export const APPROVAL_TYPES = [
   "approve_ceo_strategy",
   "budget_override_required",
   "agentmail_requirement_confirmation",
+  "agentmail_product_owner_confirmation",
+  "agentmail_tech_review",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 

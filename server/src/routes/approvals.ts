@@ -27,6 +27,12 @@ function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(a
   };
 }
 
+const AGENTMAIL_APPROVAL_TYPES = new Set([
+  "agentmail_requirement_confirmation",
+  "agentmail_product_owner_confirmation",
+  "agentmail_tech_review",
+]);
+
 export function approvalRoutes(db: Db) {
   const router = Router();
   const svc = approvalService(db);
@@ -148,7 +154,7 @@ export function approvalRoutes(db: Db) {
         },
       });
 
-      if (approval.type === "agentmail_requirement_confirmation") {
+      if (AGENTMAIL_APPROVAL_TYPES.has(approval.type)) {
         await agentmail.onApprovalApproved({
           approvalId: approval.id,
           actorType: "user",
@@ -232,7 +238,7 @@ export function approvalRoutes(db: Db) {
     );
 
     if (applied) {
-      if (approval.type === "agentmail_requirement_confirmation") {
+      if (AGENTMAIL_APPROVAL_TYPES.has(approval.type)) {
         await agentmail.onApprovalRejected({
           approvalId: approval.id,
           actorType: "user",
@@ -267,7 +273,7 @@ export function approvalRoutes(db: Db) {
         req.body.decisionNote,
       );
 
-      if (approval.type === "agentmail_requirement_confirmation") {
+      if (AGENTMAIL_APPROVAL_TYPES.has(approval.type)) {
         await agentmail.onApprovalRejected({
           approvalId: approval.id,
           actorType: "user",

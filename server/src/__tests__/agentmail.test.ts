@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   agentmailService,
-  buildAnalyzerBody,
   buildRequirementPacket,
+  canonicalizeAgentmailSubject,
+  parseCeoApprovalComment,
+  parseCtoIntakeComment,
   getWebhookEventType,
+  normalizeAgentmailMessagePayload,
+  parsePmClarificationComment,
   parseRequirementReviewComment,
-  resolveRequirementReplyAction,
+  parseTechReviewComment,
 } from "../services/agentmail.js";
 
 describe("agentmail helpers", () => {
@@ -59,6 +63,8 @@ describe("agentmail helpers", () => {
           { title: "update issue description", priority: "high" },
         ],
         projectReference: "HR",
+        rawSubject: "[Project: HR] Build the approval loop",
+        canonicalSubject: "[Project: HR] Build the approval loop",
         targetIssueId: null,
         targetIssueIdentifier: "PAP-17",
       },
@@ -74,37 +80,144 @@ describe("agentmail helpers", () => {
     expect(packet).toContain("1. add approval reply");
     expect(packet).toContain("2. update issue description");
     expect(packet).toContain("PAP-17");
-    expect(packet).toContain("Product Analyzer review and email confirmation are required");
-    expect(packet).toContain("Implementation sub-issues are intentionally deferred until the requirement is approved.");
+    expect(packet).toContain("CEO intake, PM clarification, CEO approval, and CTO technical review are required");
+    expect(packet).toContain("CTO implementation begins only after CEO approval and CTO technical review are complete.");
   });
 
-  it("builds a plain-text markdown requirement confirmation email", () => {
-    const body = buildAnalyzerBody({
-      issueIdentifier: "PAP-17",
-      issueTitle: "Build the approval loop",
-      sourceMessageId: "msg-1",
-      projectName: "HR",
-      senderEmail: "sender@example.com",
-      review: {
-        requestedChange: "Tighten the requirement before implementation starts.",
-        feasibleNow: "We can add a Product Analyzer gate with approval emails.",
-        hardOrRiskyParts: "Current routing falls back to CEO and CTO.",
-        scopeCutsAndTradeoffs: "Use approval entities instead of new issue statuses.",
-        recommendedRequirement: "Analyze first, then send approve/reject/edit email.",
-        proposedIssueBreakdown: "1. Gate routing\n2. Send review email\n3. Start implementation after approval",
+  it("canonicalizes forwarded email subjects before intake routing", () => {
+    expect(canonicalizeAgentmailSubject("Fwd: [Project: HR] Feature Import Custody for HR"))
+      .toBe("[Project: HR] Feature Import Custody for HR");
+    expect(canonicalizeAgentmailSubject("FW: Re: Fwd: [Project: HR] Feature Import Custody for HR"))
+      .toBe("[Project: HR] Feature Import Custody for HR");
+  });
+
+  it("normalizes websocket message payloads into the shared AgentMail message shape", () => {
+    const normalized = normalizeAgentmailMessagePayload({
+      message: {
+        inboxId: "inbox-1",
+        threadId: "thread-1",
+        messageId: "msg-1",
+        labels: ["inbox"],
+        timestamp: "2026-04-14T09:00:00.000Z",
+        from: "Sender Name <sender@example.com>",
+        to: ["recipient@example.com"],
+        subject: "Realtime message",
+        text: "Plain text body",
+        html: "<p>Plain text body</p>",
+        size: 42,
+        updatedAt: "2026-04-14T09:00:00.000Z",
+        createdAt: "2026-04-14T09:00:00.000Z",
       },
     });
 
-    expect(body).toContain("**Requirement review for PAP-17**");
-    expect(body).toContain("## Requested Change");
-    expect(body).toContain("## Recommended Requirement");
-    expect(body).toContain("## Reply with one of the following");
-    expect(body).toContain("- approve");
-    expect(body).toContain("- reject");
-    expect(body).toContain("- edit");
+    expect(normalized).toEqual(expect.objectContaining({
+      messageId: "msg-1",
+      threadId: "thread-1",
+      subject: "Realtime message",
+      textBody: "Plain text body",
+      htmlBody: "<p>Plain text body</p>",
+      from: {
+        email: "sender@example.com",
+        name: "Sender Name",
+      },
+    }));
   });
 
-  it("parses the analyzer requirement review template", () => {
+  it("parses the PM clarification template", () => {
+    const parsed = parsePmClarificationComment(`
+<!-- paperclip:agentmail-pm-review -->
+## Owner Summary
+Clarify the feature in a simpler way for the product owner.
+
+## Follow-up Questions
+1. Should this apply to all projects?
+
+## Recommended Requirement
+Refine the issue in Paperclip first, then request product-owner confirmation.
+
+## Notes For Tech
+The CTO should review the clarified requirement against the repo before implementation.
+`);
+
+    expect(parsed).toEqual({
+      ownerSummary: "Clarify the feature in a simpler way for the product owner.",
+      followUpQuestions: "1. Should this apply to all projects?",
+      recommendedRequirement: "Refine the issue in Paperclip first, then request product-owner confirmation.",
+      notesForTech: "The CTO should review the clarified requirement against the repo before implementation.",
+    });
+  });
+
+  it("parses the CTO intake handoff template", () => {
+    const parsed = parseCtoIntakeComment(`
+<!-- paperclip:agentmail-cto-intake -->
+## Repo Summary
+The repo already has approval primitives and issue comments we can reuse.
+
+## Implementation Constraints
+Do not commit to stakeholder wording that ignores the current access-control model.
+
+## PM Follow Up
+Confirm whether phone data access is needed for every HR role or only managers.
+
+## Recommended Requirement
+Clarify the target roles first, then ask for explicit product-owner approval on the narrowed scope.
+`);
+
+    expect(parsed).toEqual({
+      repoSummary: "The repo already has approval primitives and issue comments we can reuse.",
+      implementationConstraints:
+        "Do not commit to stakeholder wording that ignores the current access-control model.",
+      pmFollowUp: "Confirm whether phone data access is needed for every HR role or only managers.",
+      recommendedRequirement:
+        "Clarify the target roles first, then ask for explicit product-owner approval on the narrowed scope.",
+    });
+  });
+
+  it("parses the CEO approval template", () => {
+    const parsed = parseCeoApprovalComment(`
+<!-- paperclip:agentmail-ceo-approval -->
+## Decision
+Approved
+
+## Rationale
+The requirement is now clear enough for technical review.
+
+## Notes For CTO
+Preserve the narrowed HR scope and keep implementation incremental.
+`);
+
+    expect(parsed).toEqual({
+      decision: "Approved",
+      rationale: "The requirement is now clear enough for technical review.",
+      notesForCto: "Preserve the narrowed HR scope and keep implementation incremental.",
+    });
+  });
+
+  it("parses the CTO tech review template", () => {
+    const parsed = parseTechReviewComment(`
+<!-- paperclip:agentmail-tech-review -->
+## Fits Current Code
+The issue can reuse the existing approval and comment pipeline.
+
+## Open Questions
+Should PM review always notify the configured product-owner email?
+
+## Red Flags
+There is no existing Mattermost integration in this repo.
+
+## Implementation Notes
+Keep replies as plain issue comments and do not auto-approve from email.
+`);
+
+    expect(parsed).toEqual({
+      fitsCurrentCode: "The issue can reuse the existing approval and comment pipeline.",
+      openQuestions: "Should PM review always notify the configured product-owner email?",
+      redFlags: "There is no existing Mattermost integration in this repo.",
+      implementationNotes: "Keep replies as plain issue comments and do not auto-approve from email.",
+    });
+  });
+
+  it("still parses the legacy analyzer template for historical approvals", () => {
     const parsed = parseRequirementReviewComment(`
 <!-- paperclip:agentmail-requirement-review -->
 ## Requested Change
@@ -120,11 +233,11 @@ The current flow wakes CEO and CTO too early.
 Use approvals and blocked/todo instead of inventing new statuses.
 
 ## Recommended Requirement
-Require Product Analyzer review and email confirmation before implementation.
+Require PM review and manual confirmation before implementation.
 
 ## Proposed Issue Breakdown
-1. Analyzer gate
-2. Email confirmation
+1. PM gate
+2. Product-owner confirmation
 3. Approved handoff
 `);
 
@@ -133,26 +246,9 @@ Require Product Analyzer review and email confirmation before implementation.
       feasibleNow: "We can inspect the current routing and approval plumbing.",
       hardOrRiskyParts: "The current flow wakes CEO and CTO too early.",
       scopeCutsAndTradeoffs: "Use approvals and blocked/todo instead of inventing new statuses.",
-      recommendedRequirement: "Require Product Analyzer review and email confirmation before implementation.",
-      proposedIssueBreakdown: "1. Analyzer gate\n2. Email confirmation\n3. Approved handoff",
+      recommendedRequirement: "Require PM review and manual confirmation before implementation.",
+      proposedIssueBreakdown: "1. PM gate\n2. Product-owner confirmation\n3. Approved handoff",
     });
-  });
-
-  it("treats freeform reply text as an edit request in a requirement approval thread", () => {
-    const action = resolveRequirementReplyAction({
-      messageId: "msg-1",
-      subject: "Re: PAP-17 requirement confirmation",
-      from: { email: "analyzer@example.com" },
-      to: ["product@example.com"],
-      cc: [],
-      textBody: "Please change the requirement so the CTO only starts after approval.",
-      htmlBody: null,
-      receivedAt: null,
-      fireflies: null,
-      requirements: null,
-    } as any, { assumeEditOnFreeformReply: true });
-
-    expect(action).toBe("edit");
   });
 });
 

@@ -688,6 +688,51 @@ export function IssueDetail() {
     () => linkedApprovals?.find((approval) => approval.type === "agentmail_requirement_confirmation") ?? null,
     [linkedApprovals],
   );
+  const agentmailProductOwnerApproval = useMemo(
+    () => linkedApprovals?.find((approval) => approval.type === "agentmail_product_owner_confirmation") ?? null,
+    [linkedApprovals],
+  );
+  const agentmailTechReviewApproval = useMemo(
+    () => linkedApprovals?.find((approval) => approval.type === "agentmail_tech_review") ?? null,
+    [linkedApprovals],
+  );
+  const agentmailStageLabel = useMemo(() => {
+    const techPayload =
+      agentmailTechReviewApproval?.payload && typeof agentmailTechReviewApproval.payload === "object"
+        ? agentmailTechReviewApproval.payload as Record<string, unknown>
+        : null;
+    const productPayload =
+      agentmailProductOwnerApproval?.payload && typeof agentmailProductOwnerApproval.payload === "object"
+        ? agentmailProductOwnerApproval.payload as Record<string, unknown>
+        : null;
+    const techReviewReady = techPayload?.techReviewReady === true;
+    const pmReviewReady = productPayload?.pmReviewReady === true;
+
+    if (agentmailTechReviewApproval?.status === "approved") {
+      return "Ready for implementation";
+    }
+    if (
+      agentmailTechReviewApproval
+      && (agentmailTechReviewApproval.status === "pending" || agentmailTechReviewApproval.status === "revision_requested")
+    ) {
+      return techReviewReady ? "Waiting for tech-team approval" : "Waiting for tech review";
+    }
+    if (
+      agentmailProductOwnerApproval
+      && (agentmailProductOwnerApproval.status === "pending" || agentmailProductOwnerApproval.status === "revision_requested")
+    ) {
+      return pmReviewReady ? "Waiting for product-owner confirmation" : "Waiting for PM clarification";
+    }
+    if (agentmailRequirementApproval) {
+      return `Legacy requirement confirmation: ${agentmailRequirementApproval.status}`;
+    }
+    return agentmailMeta?.outboundStatus ?? null;
+  }, [
+    agentmailMeta?.outboundStatus,
+    agentmailProductOwnerApproval,
+    agentmailRequirementApproval,
+    agentmailTechReviewApproval,
+  ]);
 
   const issueCostSummary = useMemo(() => {
     let input = 0;
@@ -1451,6 +1496,7 @@ export function IssueDetail() {
         />
 
         <InlineEditor
+          key={`issue-description:${issue.id}:${String(issue.updatedAt)}:${issue.description ? "present" : "empty"}`}
           value={issue.description ?? ""}
           onSave={(description) => updateIssue.mutateAsync({ description })}
           as="p"
@@ -1641,11 +1687,21 @@ export function IssueDetail() {
               Routed project: <span className="text-foreground">{agentmailMeta.routedProjectName ?? "Company backlog"}</span>
             </div>
             <div>
-              Outbound summary: <span className="text-foreground">{agentmailMeta.outboundStatus ?? "unknown"}</span>
+              Current stage: <span className="text-foreground">{agentmailStageLabel ?? "unknown"}</span>
             </div>
-            {agentmailRequirementApproval && (
+            {agentmailProductOwnerApproval && (
               <div>
-                Requirement approval: <span className="text-foreground">{agentmailRequirementApproval.status}</span>
+                Product-owner approval: <span className="text-foreground">{agentmailProductOwnerApproval.status}</span>
+              </div>
+            )}
+            {agentmailTechReviewApproval && (
+              <div>
+                Tech review: <span className="text-foreground">{agentmailTechReviewApproval.status}</span>
+              </div>
+            )}
+            {agentmailRequirementApproval && !agentmailProductOwnerApproval && !agentmailTechReviewApproval && (
+              <div>
+                Legacy approval: <span className="text-foreground">{agentmailRequirementApproval.status}</span>
               </div>
             )}
             <div className="sm:col-span-2">

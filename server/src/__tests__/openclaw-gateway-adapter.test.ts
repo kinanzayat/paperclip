@@ -172,6 +172,158 @@ async function createMockGatewayServer(options?: {
   };
 }
 
+async function createMockGatewayServerWithInitialAgentValidationError(options: {
+  firstAgentErrorMessage: string;
+  acceptRetryWithoutPaperclip?: boolean;
+}) {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+
+  const agentPayloads: Record<string, unknown>[] = [];
+  let connectionCount = 0;
+
+  wss.on("connection", (socket) => {
+    connectionCount += 1;
+    socket.send(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "nonce-123" },
+      }),
+    );
+
+    socket.on("message", (raw) => {
+      const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw);
+      const frame = JSON.parse(text) as {
+        type: string;
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+
+      if (frame.type !== "req") return;
+
+      if (frame.method === "connect") {
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              type: "hello-ok",
+              protocol: 3,
+              server: { version: "test", connId: `conn-${connectionCount}` },
+              features: { methods: ["connect", "agent", "agent.wait"], events: ["agent"] },
+              snapshot: { version: 1, ts: Date.now() },
+              policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 30_000 },
+            },
+          }),
+        );
+        return;
+      }
+
+      if (frame.method === "agent") {
+        const params = (frame.params ?? {}) as Record<string, unknown>;
+        agentPayloads.push(params);
+        const runId = typeof params.idempotencyKey === "string" ? params.idempotencyKey : "run-123";
+
+        if (agentPayloads.length === 1) {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: {
+                code: "INVALID_AGENT_PARAMS",
+                message: options.firstAgentErrorMessage,
+              },
+            }),
+          );
+          return;
+        }
+
+        if (options.acceptRetryWithoutPaperclip && "paperclip" in params) {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: {
+                code: "INVALID_AGENT_PARAMS",
+                message: "expected retry without root paperclip payload",
+              },
+            }),
+          );
+          return;
+        }
+
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              runId,
+              status: "accepted",
+              acceptedAt: Date.now(),
+            },
+          }),
+        );
+
+        socket.send(
+          JSON.stringify({
+            type: "event",
+            event: "agent",
+            payload: {
+              runId,
+              seq: 1,
+              stream: "assistant",
+              ts: Date.now(),
+              data: { delta: "compat-ok" },
+            },
+          }),
+        );
+        return;
+      }
+
+      if (frame.method === "agent.wait") {
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: {
+              runId: frame.params?.runId,
+              status: "ok",
+              startedAt: 1,
+              endedAt: 2,
+            },
+          }),
+        );
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to resolve test server address");
+  }
+
+  return {
+    url: `ws://127.0.0.1:${address.port}`,
+    getAgentPayloads: () => agentPayloads,
+    getConnectionCount: () => connectionCount,
+    close: async () => {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
 async function createMockGatewayServerWithPairing() {
   const server = createServer();
   const wss = new WebSocketServer({ server });
@@ -601,6 +753,92 @@ describe("openclaw gateway adapter execute", () => {
       );
       expect(logs.some((entry) => entry.includes("auto-approved pairing request"))).toBe(true);
       expect(gateway.getAgentPayload()).toBeTruthy();
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("retries once without root paperclip payload when older gateways reject that field", async () => {
+    const gateway = await createMockGatewayServerWithInitialAgentValidationError({
+      firstAgentErrorMessage: "invalid agent params: at root: unexpected property 'paperclip'",
+      acceptRetryWithoutPaperclip: true,
+    });
+    const logs: string[] = [];
+
+    try {
+      const result = await execute(
+        buildContext(
+          {
+            url: gateway.url,
+            headers: {
+              "x-openclaw-token": "gateway-token",
+            },
+            payloadTemplate: {
+              message: "wake now",
+            },
+            waitTimeoutMs: 2000,
+          },
+          {
+            onLog: async (_stream, chunk) => {
+              logs.push(chunk);
+            },
+          },
+        ),
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.summary).toContain("compat-ok");
+
+      const payloads = gateway.getAgentPayloads();
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.paperclip).toBeTruthy();
+      expect(payloads[1]?.paperclip).toBeUndefined();
+      expect(payloads[1]?.idempotencyKey).toBe(payloads[0]?.idempotencyKey);
+      expect(payloads[1]?.sessionKey).toBe(payloads[0]?.sessionKey);
+      expect(gateway.getConnectionCount()).toBe(2);
+      expect(
+        logs.some((entry) =>
+          entry.includes("gateway rejected root paperclip payload; reconnecting and retrying without the root paperclip field"),
+        ),
+      ).toBe(true);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("does not retry for unrelated invalid agent params failures", async () => {
+    const gateway = await createMockGatewayServerWithInitialAgentValidationError({
+      firstAgentErrorMessage: "invalid agent params: at root: unexpected property 'metadata'",
+    });
+    const logs: string[] = [];
+
+    try {
+      const result = await execute(
+        buildContext(
+          {
+            url: gateway.url,
+            headers: {
+              "x-openclaw-token": "gateway-token",
+            },
+            payloadTemplate: {
+              message: "wake now",
+            },
+            waitTimeoutMs: 2000,
+          },
+          {
+            onLog: async (_stream, chunk) => {
+              logs.push(chunk);
+            },
+          },
+        ),
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.errorCode).toBe("openclaw_gateway_request_failed");
+      expect(String(result.errorMessage ?? "")).toContain("unexpected property 'metadata'");
+      expect(gateway.getAgentPayloads()).toHaveLength(1);
+      expect(gateway.getConnectionCount()).toBe(1);
+      expect(logs.some((entry) => entry.includes("gateway rejected root paperclip payload"))).toBe(false);
     } finally {
       await gateway.close();
     }

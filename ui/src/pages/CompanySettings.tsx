@@ -90,7 +90,8 @@ export function CompanySettings() {
   // General settings local state
   const [companyName, setCompanyName] = useState("");
   const [description, setDescription] = useState("");
-  const [productAnalyzerEmail, setProductAnalyzerEmail] = useState("");
+  const [productOwnerEmail, setProductOwnerEmail] = useState("");
+  const [techTeamEmail, setTechTeamEmail] = useState("");
   const [brandColor, setBrandColor] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
@@ -100,7 +101,8 @@ export function CompanySettings() {
     if (!selectedCompany) return;
     setCompanyName(selectedCompany.name);
     setDescription(selectedCompany.description ?? "");
-    setProductAnalyzerEmail(selectedCompany.productAnalyzerEmail ?? "");
+    setProductOwnerEmail(selectedCompany.productOwnerEmail ?? "");
+    setTechTeamEmail(selectedCompany.techTeamEmail ?? "");
     setBrandColor(selectedCompany.brandColor ?? "");
     setLogoUrl(selectedCompany.logoUrl ?? "");
   }, [selectedCompany]);
@@ -148,7 +150,8 @@ export function CompanySettings() {
     !!selectedCompany &&
     (companyName !== selectedCompany.name ||
       description !== (selectedCompany.description ?? "") ||
-      productAnalyzerEmail !== (selectedCompany.productAnalyzerEmail ?? "") ||
+      productOwnerEmail !== (selectedCompany.productOwnerEmail ?? "") ||
+      techTeamEmail !== (selectedCompany.techTeamEmail ?? "") ||
       brandColor !== (selectedCompany.brandColor ?? ""));
 
   const invalidateCompanyStatusViews = async () => {
@@ -166,7 +169,8 @@ export function CompanySettings() {
     mutationFn: (data: {
       name: string;
       description: string | null;
-      productAnalyzerEmail: string | null;
+      productOwnerEmail: string | null;
+      techTeamEmail: string | null;
       brandColor: string | null;
     }) => companiesApi.update(selectedCompanyId!, data),
     onSuccess: () => {
@@ -555,7 +559,8 @@ export function CompanySettings() {
     generalMutation.mutate({
       name: companyName.trim(),
       description: description.trim() || null,
-      productAnalyzerEmail: productAnalyzerEmail.trim() || null,
+      productOwnerEmail: productOwnerEmail.trim() || null,
+      techTeamEmail: techTeamEmail.trim() || null,
       brandColor: brandColor || null
     });
   }
@@ -594,15 +599,27 @@ export function CompanySettings() {
             />
           </Field>
           <Field
-            label="Product analyzer email"
-            hint="AgentMail requirement confirmation emails will be sent to this address for this company."
+            label="Product owner email"
+            hint="AgentMail milestone notifications for product-side review are sent to this address."
           >
             <input
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
               type="email"
-              value={productAnalyzerEmail}
-              placeholder="product-analyzer@your-company.example"
-              onChange={(e) => setProductAnalyzerEmail(e.target.value)}
+              value={productOwnerEmail}
+              placeholder="product-owner@your-company.example"
+              onChange={(e) => setProductOwnerEmail(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Tech team email"
+            hint="AgentMail milestone notifications for technical review are sent to this address."
+          >
+            <input
+              className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
+              type="email"
+              value={techTeamEmail}
+              placeholder="tech-team@your-company.example"
+              onChange={(e) => setTechTeamEmail(e.target.value)}
             />
           </Field>
         </div>
@@ -1066,9 +1083,9 @@ export function CompanySettings() {
         <div className="space-y-3 rounded-md border border-border px-4 py-4">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">
-              Generate an OpenClaw agent invite snippet.
+              Generate a PM OpenClaw agent invite snippet.
             </span>
-            <HintIcon text="Creates a short-lived OpenClaw agent invite and renders a copy-ready prompt." />
+            <HintIcon text="Creates a short-lived OpenClaw agent invite and renders a copy-ready PM onboarding prompt." />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -1079,7 +1096,7 @@ export function CompanySettings() {
             >
               {inviteMutation.isPending
                 ? "Generating..."
-                : "Generate OpenClaw Invite Prompt"}
+                : "Generate PM OpenClaw Invite Prompt"}
             </Button>
           </div>
           {inviteError && (
@@ -1092,7 +1109,7 @@ export function CompanySettings() {
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs text-muted-foreground">
-                  OpenClaw Invite Prompt
+                  PM OpenClaw Invite Prompt
                 </div>
                 {snippetCopied && (
                   <span
@@ -1246,7 +1263,7 @@ Then verify with: curl -fsS <base-url>/api/health`;
     ? `\nYou MUST test Paperclip-to-gateway reachability, call: ${resolutionTestUrl}?url=<urlencoded-gateway-url> (using the hostname that worked above). Do not assume your 172.x is necessarily reachable from Paperclip. Test it. `
     : "";
 
-  return `You're invited to join a Paperclip organization.
+  return `You're invited to join a Paperclip organization as the PM / product-owner coordination agent.
 
 The URLs you should try are:
 ${candidateList}
@@ -1257,12 +1274,13 @@ Verify the hostname works from your runtime with: GET <base-url>/api/health
 
 ${connectivityBlock}
 
-For your "agentName", just use your own agent name (OpenClaw or whatever your name is) and send it directly.
+For your "agentName", use your own PM agent name and send it directly.
 You also need to send a gateway URL that Paperclip can access. Check your config and include that URL.${resolutionLine}
+For long-running remote setups, prefer a stable public \`wss://\` hostname such as a domain/subdomain reverse-proxied to the local OpenClaw gateway instead of a temporary quick tunnel.
 
 ---
 
-This onboarding flow is for OpenClaw Gateway.
+This onboarding flow is for the PM OpenClaw Gateway agent.
 When you submit the join request, use:
 - \`adapterType: "openclaw_gateway"\`
 - \`agentDefaultsPayload.url\` as your \`ws://\` or \`wss://\` gateway URL

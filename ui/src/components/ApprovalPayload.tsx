@@ -5,7 +5,9 @@ export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
   approve_ceo_strategy: "CEO Strategy",
   budget_override_required: "Budget Override",
-  agentmail_requirement_confirmation: "Requirement Confirmation",
+  agentmail_requirement_confirmation: "Legacy Requirement Confirmation",
+  agentmail_product_owner_confirmation: "Product Owner Confirmation",
+  agentmail_tech_review: "Tech Review",
 };
 
 /** Build a contextual label for an approval, e.g. "Hire Agent: Designer" */
@@ -22,6 +24,8 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   approve_ceo_strategy: Lightbulb,
   budget_override_required: ShieldAlert,
   agentmail_requirement_confirmation: Mail,
+  agentmail_product_owner_confirmation: Mail,
+  agentmail_tech_review: Mail,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -163,9 +167,39 @@ export function AgentmailRequirementPayload({ payload }: { payload: Record<strin
   );
 }
 
+export function AgentmailProductOwnerPayload({ payload }: { payload: Record<string, unknown> }) {
+  return (
+    <div className="mt-3 space-y-2 text-sm">
+      <PayloadField label="Issue" value={payload.issueIdentifier ?? payload.issueTitle} />
+      <PayloadField label="Owner" value={payload.productOwnerEmail} />
+      <PayloadField label="PM" value={payload.pmAgentName} />
+      <RequirementReviewSection label="Owner summary" value={payload.ownerSummary} />
+      <RequirementReviewSection label="Follow-up questions" value={payload.followUpQuestions} />
+      <RequirementReviewSection label="Recommended requirement" value={payload.recommendedRequirement} />
+      <RequirementReviewSection label="Notes for tech" value={payload.notesForTech} />
+    </div>
+  );
+}
+
+export function AgentmailTechReviewPayload({ payload }: { payload: Record<string, unknown> }) {
+  return (
+    <div className="mt-3 space-y-2 text-sm">
+      <PayloadField label="Issue" value={payload.issueIdentifier ?? payload.issueTitle} />
+      <PayloadField label="Tech team" value={payload.techTeamEmail} />
+      <PayloadField label="Reviewer" value={payload.reviewerAgentName} />
+      <RequirementReviewSection label="Fits current code" value={payload.fitsCurrentCode} />
+      <RequirementReviewSection label="Open questions" value={payload.openQuestions} />
+      <RequirementReviewSection label="Red flags" value={payload.redFlags} />
+      <RequirementReviewSection label="Implementation notes" value={payload.implementationNotes} />
+    </div>
+  );
+}
+
 export function ApprovalPayloadRenderer({ type, payload }: { type: string; payload: Record<string, unknown> }) {
   if (type === "hire_agent") return <HireAgentPayload payload={payload} />;
   if (type === "budget_override_required") return <BudgetOverridePayload payload={payload} />;
   if (type === "agentmail_requirement_confirmation") return <AgentmailRequirementPayload payload={payload} />;
+  if (type === "agentmail_product_owner_confirmation") return <AgentmailProductOwnerPayload payload={payload} />;
+  if (type === "agentmail_tech_review") return <AgentmailTechReviewPayload payload={payload} />;
   return <CeoStrategyPayload payload={payload} />;
 }

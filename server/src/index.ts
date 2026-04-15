@@ -34,6 +34,7 @@ import {
   reconcilePersistedRuntimeServicesOnStartup,
   routineService,
 } from "./services/index.js";
+import { agentmailInboundListener } from "./services/agentmail-inbound.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
@@ -542,6 +543,7 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler,
     resolveSession,
   });
+  await agentmailInboundListener.start(db as any);
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
   
   if (listenPort !== config.port) {

@@ -21,6 +21,8 @@ import {
   approvals,
   activityLog,
   companySecrets,
+  agentmailWebhookDeliveries,
+  agentmailOutboundNotifications,
   joinRequests,
   invites,
   principalPermissionGrants,
@@ -45,7 +47,8 @@ export function companyService(db: Db) {
     feedbackDataSharingConsentAt: companies.feedbackDataSharingConsentAt,
     feedbackDataSharingConsentByUserId: companies.feedbackDataSharingConsentByUserId,
     feedbackDataSharingTermsVersion: companies.feedbackDataSharingTermsVersion,
-    productAnalyzerEmail: companies.productAnalyzerEmail,
+    productOwnerEmail: companies.productOwnerEmail,
+    techTeamEmail: companies.techTeamEmail,
     brandColor: companies.brandColor,
     logoAssetId: companyLogos.assetId,
     createdAt: companies.createdAt,
@@ -271,6 +274,8 @@ export function companyService(db: Db) {
         await tx.delete(approvalComments).where(eq(approvalComments.companyId, id));
         await tx.delete(approvals).where(eq(approvals.companyId, id));
         await tx.delete(companySecrets).where(eq(companySecrets.companyId, id));
+        await tx.delete(agentmailWebhookDeliveries).where(eq(agentmailWebhookDeliveries.companyId, id));
+        await tx.delete(agentmailOutboundNotifications).where(eq(agentmailOutboundNotifications.companyId, id));
         await tx.delete(joinRequests).where(eq(joinRequests.companyId, id));
         await tx.delete(invites).where(eq(invites.companyId, id));
         await tx.delete(principalPermissionGrants).where(eq(principalPermissionGrants.companyId, id));

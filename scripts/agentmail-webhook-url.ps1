@@ -101,6 +101,23 @@ function Set-Or-AppendEnvLine {
   return ,$Lines
 }
 
+function Get-EnvValue {
+  param(
+    [string[]]$Lines,
+    [string]$Key
+  )
+
+  $pattern = "^" + [regex]::Escape($Key) + "=(.*)$"
+  foreach ($line in $Lines) {
+    $match = [regex]::Match($line, $pattern)
+    if ($match.Success) {
+      return $match.Groups[1].Value.Trim()
+    }
+  }
+
+  return $null
+}
+
 function Update-InstanceEnv {
   param(
     [string]$FilePath,
@@ -127,6 +144,21 @@ function Update-InstanceEnv {
   Set-Content -Path $FilePath -Value $content -Encoding UTF8
 }
 
+function Get-TransportMode {
+  param([string]$FilePath)
+
+  if (-not (Test-Path $FilePath)) {
+    return $null
+  }
+
+  $content = Get-Content -Path $FilePath
+  if (-not $content) {
+    return $null
+  }
+
+  return Get-EnvValue -Lines $content -Key "PAPERCLIP_AGENTMAIL_INBOUND_TRANSPORT"
+}
+
 $tunnelUrl = Get-TunnelUrl -Url $MetricsUrl
 
 if ($CompanyId -and $CompanyId.Trim().Length -gt 0) {
@@ -138,18 +170,31 @@ if ($CompanyId -and $CompanyId.Trim().Length -gt 0) {
   $selectedCompanyName = $company.name
 }
 
-$webhookUrl = "$tunnelUrl/api/companies/$selectedCompanyId/webhooks/agentmail"
-
 if ($UpdateEnv) {
   Update-InstanceEnv -FilePath $EnvFile -TunnelUrl $tunnelUrl
 }
 
-$webhookUrl | Set-Clipboard
+$transportMode = Get-TransportMode -FilePath $EnvFile
+$statusUrl = "$ApiBase/api/companies/$selectedCompanyId/agentmail/status"
+$webhookUrl = "$tunnelUrl/api/companies/$selectedCompanyId/webhooks/agentmail"
 
 Write-Host "Tunnel URL: $tunnelUrl"
 Write-Host "Company: $selectedCompanyName ($selectedCompanyId)"
 if ($UpdateEnv) {
   Write-Host "Updated env file: $EnvFile"
 }
-Write-Host "AgentMail webhook URL copied to clipboard:"
-Write-Host $webhookUrl
+
+if ($transportMode -and $transportMode.Trim().ToLowerInvariant() -eq "websocket") {
+  $tunnelUrl | Set-Clipboard
+  Write-Host "Inbound transport mode: websocket"
+  Write-Host "Copied Paperclip public URL to clipboard:"
+  Write-Host $tunnelUrl
+  Write-Host "AgentMail webhook URL is not used in websocket mode."
+  Write-Host "Check listener status with:"
+  Write-Host $statusUrl
+} else {
+  $webhookUrl | Set-Clipboard
+  Write-Host "Inbound transport mode: webhook"
+  Write-Host "AgentMail webhook URL copied to clipboard:"
+  Write-Host $webhookUrl
+}

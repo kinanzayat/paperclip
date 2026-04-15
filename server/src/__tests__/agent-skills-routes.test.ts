@@ -469,7 +469,7 @@ describe("agent skill routes", () => {
     expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        "AGENTS.md": expect.stringContaining("if the issue is an AgentMail requirement intake or is blocked on requirement approval or clarification"),
+        "AGENTS.md": expect.stringContaining("if the issue is an AgentMail requirement intake or is blocked on PM clarification, CEO approval, or CTO technical review"),
       }),
       { entryFile: "AGENTS.md", replaceExisting: false },
     );
@@ -500,7 +500,7 @@ describe("agent skill routes", () => {
     expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        "AGENTS.md": expect.stringContaining("If an issue is blocked, awaiting approval, or explicitly waiting on requirement clarification"),
+        "AGENTS.md": expect.stringContaining("If an issue is blocked, awaiting approval, or explicitly waiting on PM clarification, CEO approval, or tech review"),
       }),
       { entryFile: "AGENTS.md", replaceExisting: false },
     );

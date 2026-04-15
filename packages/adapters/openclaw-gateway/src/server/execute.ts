@@ -1025,6 +1025,52 @@ function extractResultText(value: unknown): string | null {
   return nonEmpty(record.text) ?? nonEmpty(record.summary) ?? null;
 }
 
+function buildAgentRequestParams(options: {
+  payloadTemplate: Record<string, unknown>;
+  message: string;
+  sessionKey: string;
+  runId: string;
+  waitTimeoutMs: number;
+  configuredAgentId: string | null;
+  paperclipPayload: Record<string, unknown>;
+  includeRootPaperclipPayload: boolean;
+}): Record<string, unknown> {
+  const agentParams: Record<string, unknown> = {
+    ...options.payloadTemplate,
+    message: options.message,
+    sessionKey: options.sessionKey,
+    idempotencyKey: options.runId,
+  };
+
+  delete agentParams.text;
+
+  if (options.includeRootPaperclipPayload) {
+    agentParams.paperclip = options.paperclipPayload;
+  } else {
+    delete agentParams.paperclip;
+  }
+
+  if (options.configuredAgentId && !nonEmpty(agentParams.agentId)) {
+    agentParams.agentId = options.configuredAgentId;
+  }
+
+  if (typeof agentParams.timeout !== "number") {
+    agentParams.timeout = options.waitTimeoutMs;
+  }
+
+  return agentParams;
+}
+
+function isRootPaperclipCompatibilityError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("invalid agent params") &&
+    lower.includes("unexpected property") &&
+    lower.includes("paperclip")
+  );
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const urlValue = asString(ctx.config.url, "").trim();
   if (!urlValue) {
@@ -1107,24 +1153,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
   const message = templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText;
   const paperclipPayload = buildStandardPaperclipPayload(ctx, wakePayload, paperclipEnv, payloadTemplate);
-
-  const agentParams: Record<string, unknown> = {
-    ...payloadTemplate,
-    message,
-    sessionKey,
-    idempotencyKey: ctx.runId,
-  };
-  delete agentParams.text;
-  agentParams.paperclip = paperclipPayload;
-
   const configuredAgentId = nonEmpty(ctx.config.agentId);
-  if (configuredAgentId && !nonEmpty(agentParams.agentId)) {
-    agentParams.agentId = configuredAgentId;
-  }
-
-  if (typeof agentParams.timeout !== "number") {
-    agentParams.timeout = waitTimeoutMs;
-  }
 
   if (ctx.onMeta) {
     await ctx.onMeta({
@@ -1142,9 +1171,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   );
   await ctx.onLog(
     "stdout",
-    `[openclaw-gateway] outbound payload (redacted): ${stringifyForLog(redactForLog(agentParams), 12_000)}\n`,
+    `[openclaw-gateway] outbound header keys: ${outboundHeaderKeys.join(", ")}\n`,
   );
-  await ctx.onLog("stdout", `[openclaw-gateway] outbound header keys: ${outboundHeaderKeys.join(", ")}\n`);
   if (transportHint) {
     await ctx.onLog(
       "stdout",
@@ -1160,9 +1188,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const autoPairOnFirstConnect = parseBoolean(ctx.config.autoPairOnFirstConnect, true);
   let autoPairAttempted = false;
+  let rootPaperclipCompatibilityRetryAttempted = false;
   let latestResultPayload: unknown = null;
 
   while (true) {
+    const includeRootPaperclipPayload = !rootPaperclipCompatibilityRetryAttempted;
+    const agentParams = buildAgentRequestParams({
+      payloadTemplate,
+      message,
+      sessionKey,
+      runId: ctx.runId,
+      waitTimeoutMs,
+      configuredAgentId,
+      paperclipPayload,
+      includeRootPaperclipPayload,
+    });
     const trackedRunIds = new Set<string>([ctx.runId]);
     const assistantChunks: string[] = [];
     let lifecycleError: string | null = null;
@@ -1224,6 +1264,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
 
     try {
+      await ctx.onLog(
+        "stdout",
+        `[openclaw-gateway] request payload mode=${includeRootPaperclipPayload ? "rich-paperclip" : "message-only-compat"}\n`,
+      );
+      await ctx.onLog(
+        "stdout",
+        `[openclaw-gateway] outbound payload (redacted): ${stringifyForLog(redactForLog(agentParams), 12_000)}\n`,
+      );
+
       deviceIdentity = disableDeviceAuth ? null : resolveDeviceIdentity(parseObject(ctx.config));
       if (deviceIdentity) {
         await ctx.onLog(
@@ -1413,6 +1462,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const lower = message.toLowerCase();
       const timedOut = lower.includes("timeout");
       const pairingRequired = lower.includes("pairing required");
+      const rootPaperclipCompatibilityError = isRootPaperclipCompatibilityError(err);
+
+      if (rootPaperclipCompatibilityError && !rootPaperclipCompatibilityRetryAttempted) {
+        rootPaperclipCompatibilityRetryAttempted = true;
+        await ctx.onLog(
+          "stdout",
+          "[openclaw-gateway] gateway rejected root paperclip payload; reconnecting and retrying without the root paperclip field\n",
+        );
+        continue;
+      }
 
       if (
         pairingRequired &&
