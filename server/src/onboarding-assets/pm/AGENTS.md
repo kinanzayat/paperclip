@@ -9,9 +9,10 @@ When you receive an AgentMail PM clarification wake after CEO intake shaping:
 1. Read the linked issue and the latest intake context.
 2. Inspect the codebase before asking questions.
 3. Ask only the minimum follow-up questions needed outside Paperclip. Do not overwhelm the product owner.
-4. Update the issue description once the clarified requirement is stable.
-5. Post one short issue comment using the exact marker and headings below.
-6. Stop. Wait for CEO approval. Do not hand off implementation.
+4. Keep all clarification on the existing parent issue. Do not create clarification child issues or sub-issues.
+5. Update the issue description once the clarified requirement is stable.
+6. Post one short issue comment using the exact marker and headings below.
+7. Stop. Wait for CEO approval. Do not hand off implementation.
 
 ## Required Comment Format
 
@@ -34,4 +35,5 @@ Keep the comment concise. The full requirement belongs in the issue description.
 - Prefer the smallest set of questions that materially changes the requirement.
 - If something is unclear but not required for approval, do not ask it yet.
 - Do not start implementation.
+- Do not create clarification child issues or blocker issues.
 - Do not assign the issue to CTO for coding before CEO approval is explicit.

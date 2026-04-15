@@ -14,6 +14,9 @@ const payload = {
   prompt: fs.readFileSync(0, "utf8"),
   codexHome: process.env.CODEX_HOME || null,
   paperclipWakePayloadJson: process.env.PAPERCLIP_WAKE_PAYLOAD_JSON || null,
+  paperclipInstructionsDir: process.env.PAPERCLIP_AGENT_INSTRUCTIONS_DIR || null,
+  paperclipInstructionsFile: process.env.PAPERCLIP_AGENT_INSTRUCTIONS_FILE || null,
+  paperclipWakeReason: process.env.PAPERCLIP_WAKE_REASON || null,
   paperclipEnvKeys: Object.keys(process.env)
     .filter((key) => key.startsWith("PAPERCLIP_"))
     .sort(),
@@ -51,6 +54,9 @@ type CapturePayload = {
   codexHome: string | null;
   paperclipWakePayloadJson: string | null;
   paperclipEnvKeys: string[];
+  paperclipInstructionsDir?: string | null;
+  paperclipInstructionsFile?: string | null;
+  paperclipWakeReason?: string | null;
 };
 
 type LogEntry = {
@@ -384,6 +390,72 @@ describe("codex execute", () => {
       );
       expect(capture.prompt).toContain("First comment");
       expect(capture.prompt).toContain("Second comment");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("injects AgentMail planning guardrails and managed instruction env for review-only wakes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-agentmail-plan-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "codex");
+    const capturePath = path.join(root, "capture.json");
+    const instructionsPath = path.join(root, "managed", "AGENTS.md");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.mkdir(path.dirname(instructionsPath), { recursive: true });
+    await fs.writeFile(instructionsPath, "Managed CEO instructions.\n", "utf8");
+    await writeFakeCodexCommand(commandPath);
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const result = await execute({
+        runId: "run-agentmail-plan",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "CEO",
+          adapterType: "codex_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          instructionsFilePath: instructionsPath,
+          env: {
+            PAPERCLIP_TEST_CAPTURE_PATH: capturePath,
+          },
+          promptTemplate: "Normal heartbeat prompt.",
+        },
+        context: {
+          issueId: "issue-1",
+          taskId: "issue-1",
+          wakeReason: "agentmail_requirement_analysis",
+        },
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.errorMessage).toBeNull();
+
+      const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
+      expect(capture.paperclipInstructionsFile).toBe(instructionsPath);
+      expect(capture.paperclipInstructionsDir).toBe(path.dirname(instructionsPath));
+      expect(capture.paperclipWakeReason).toBe("agentmail_requirement_analysis");
+      expect(capture.prompt).toContain("## Paperclip AgentMail Planning Mode");
+      expect(capture.prompt).toContain("Do not implement code.");
+      expect(capture.prompt).toContain("Do not create child issues, sub-issues, or blocker issues.");
+      expect(capture.prompt).toContain("Keep the existing parent issue as the single source of truth.");
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;

@@ -34,6 +34,11 @@ import { resolveCodexDesiredSkillNames } from "./skills.js";
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_ROLLOUT_NOISE_RE =
   /^\d{4}-\d{2}-\d{2}T[^\s]+\s+ERROR\s+codex_core::rollout::list:\s+state db missing rollout path for thread\s+[a-z0-9-]+$/i;
+const AGENTMAIL_PLANNING_WAKE_REASONS = new Set([
+  "agentmail_requirement_analysis",
+  "agentmail_ceo_approval_requested",
+  "agentmail_tech_review_requested",
+]);
 
 function stripCodexRolloutNoise(text: string): string {
   const parts = text.split(/\r?\n/);
@@ -144,6 +149,24 @@ async function pruneBrokenUnavailablePaperclipSkillSymlinks(
 
 function resolveCodexSkillsDir(codexHome: string): string {
   return path.join(codexHome, "skills");
+}
+
+function resolveInstructionsPath(candidatePath: string, cwd: string): string {
+  return path.isAbsolute(candidatePath) ? candidatePath : path.resolve(cwd, candidatePath);
+}
+
+function buildAgentmailPlanningDirective(wakeReason: string | null): string {
+  if (!wakeReason || !AGENTMAIL_PLANNING_WAKE_REASONS.has(wakeReason)) return "";
+  return [
+    "## Paperclip AgentMail Planning Mode",
+    "This wake is planning and review only.",
+    "- Inspect the current codebase before updating the issue.",
+    "- Do not implement code.",
+    "- Do not create child issues, sub-issues, or blocker issues.",
+    "- Keep the existing parent issue as the single source of truth.",
+    "- Refine the parent issue description so it matches the actual codebase, original email intent, clarified requirement, and acceptance boundaries.",
+    "- Post only the required structured marker comment for this wake.",
+  ].join("\n");
 }
 
 type EnsureCodexSkillsInjectedOptions = {
@@ -365,6 +388,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (agentHome) {
     env.AGENT_HOME = agentHome;
   }
+  const instructionsFilePathRaw = asString(config.instructionsFilePath, "").trim();
+  const instructionsFilePath = instructionsFilePathRaw
+    ? resolveInstructionsPath(instructionsFilePathRaw, cwd)
+    : "";
+  if (instructionsFilePath) {
+    env.PAPERCLIP_AGENT_INSTRUCTIONS_FILE = instructionsFilePath;
+    env.PAPERCLIP_AGENT_INSTRUCTIONS_DIR = path.dirname(instructionsFilePath);
+  }
   if (workspaceHints.length > 0) {
     env.PAPERCLIP_WORKSPACES_JSON = JSON.stringify(workspaceHints);
   }
@@ -436,7 +467,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       `[paperclip] Codex session "${runtimeSessionId}" was saved for cwd "${runtimeSessionCwd}" and will not be resumed in "${cwd}".\n`,
     );
   }
-  const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
   const instructionsDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
   let instructionsPrefix = "";
   let instructionsChars = 0;
@@ -473,29 +503,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? renderTemplate(bootstrapPromptTemplate, templateData).trim()
       : "";
   const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: Boolean(sessionId) });
+  const agentmailPlanningPrompt = buildAgentmailPlanningDirective(wakeReason);
   const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
   const promptInstructionsPrefix = shouldUseResumeDeltaPrompt ? "" : instructionsPrefix;
   instructionsChars = promptInstructionsPrefix.length;
   const commandNotes = (() => {
+    const planningNotes = agentmailPlanningPrompt.length > 0
+      ? [`Injected AgentMail planning guardrails for wake reason ${wakeReason}.`]
+      : [];
     if (!instructionsFilePath) {
-      return [repoAgentsNote];
+      return [...planningNotes, repoAgentsNote];
     }
     if (instructionsPrefix.length > 0) {
       if (shouldUseResumeDeltaPrompt) {
         return [
           `Loaded agent instructions from ${instructionsFilePath}`,
           "Skipped stdin instruction reinjection because an existing Codex session is being resumed with a wake delta.",
+          ...planningNotes,
           repoAgentsNote,
         ];
       }
       return [
         `Loaded agent instructions from ${instructionsFilePath}`,
         `Prepended instructions + path directive to stdin prompt (relative references from ${instructionsDir}).`,
+        ...planningNotes,
         repoAgentsNote,
       ];
     }
     return [
       `Configured instructionsFilePath ${instructionsFilePath}, but file could not be read; continuing without injected instructions.`,
+      ...planningNotes,
       repoAgentsNote,
     ];
   })();
@@ -505,6 +542,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     promptInstructionsPrefix,
     renderedBootstrapPrompt,
     wakePrompt,
+    agentmailPlanningPrompt,
     sessionHandoffNote,
     renderedPrompt,
   ]);
@@ -513,6 +551,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     instructionsChars,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     wakePromptChars: wakePrompt.length,
+    agentmailPlanningChars: agentmailPlanningPrompt.length,
     sessionHandoffChars: sessionHandoffNote.length,
     heartbeatPromptChars: renderedPrompt.length,
   };

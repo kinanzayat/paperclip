@@ -262,4 +262,62 @@ describe("AgentMail intake routing", () => {
       status: "blocked",
     }));
   });
+
+  it("extracts prose requirements into the parent issue description", async () => {
+    const { db } = createDb();
+    const service = agentmailService(db as any);
+
+    mockIssueService.getById.mockResolvedValue(null);
+    mockIssueService.create.mockResolvedValue({
+      id: "issue-created-2",
+      companyId: "company-1",
+      identifier: "B-12",
+    });
+
+    const result = await service.processInboundMessage("company-1", {
+      messageId: "msg-new-3",
+      threadId: "thread-3",
+      subject: "[Project: HR] Feature Employee Handbook improvment",
+      from: { email: "sender@example.com" },
+      to: ["codex32@agentmail.to"],
+      cc: [],
+      textBody: [
+        "so in the Employee Handbook i want to add a small detail",
+        "so for the Policy it have Title URL and category",
+        "so i want to add a new field for the location and it supports multi options",
+        "we already have a locations table in our database",
+        "so we need to add this field in the ui and database",
+        "so it is just limit the view for the employees so they don't get confused with other locations Policy",
+      ].join("\n"),
+      htmlBody: null,
+      receivedAt: null,
+      fireflies: null,
+      requirements: null,
+    } as any, {
+      transport: "websocket",
+      eventType: "message.received",
+    });
+
+    expect(result).toEqual({
+      status: "processed",
+      issueId: "issue-created-2",
+      issueIdentifier: "B-12",
+      subIssueCount: 0,
+      outboundStatus: "awaiting_ceo_analysis",
+    });
+    expect(mockIssueService.create).toHaveBeenCalledWith("company-1", expect.objectContaining({
+      title: "Feature Employee Handbook improvment",
+      projectId: "project-hr",
+      status: "blocked",
+    }));
+    expect(mockIssueService.create.mock.calls[0]?.[1]?.description).toContain(
+      "1. Add a new field for the location and it supports multi options",
+    );
+    expect(mockIssueService.create.mock.calls[0]?.[1]?.description).toContain(
+      "2. Reuse a locations table in our database",
+    );
+    expect(mockIssueService.create.mock.calls[0]?.[1]?.description).toContain(
+      "3. Add this field in the ui and database",
+    );
+  });
 });

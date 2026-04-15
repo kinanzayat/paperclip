@@ -68,6 +68,7 @@ import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
 import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
 import {
   loadDefaultAgentInstructionsBundle,
+  loadDefaultAgentInstructionsBundleWithVersion,
   resolveDefaultAgentInstructionsBundleRole,
 } from "../services/default-agent-instructions.js";
 import { getTelemetryClient } from "../telemetry.js";
@@ -92,6 +93,7 @@ export function agentRoutes(db: Db) {
     "instructionsFilePath",
     "agentsMdPath",
   ] as const;
+  const MANAGED_INSTRUCTIONS_VERSION_KEY = "managedInstructionsBundleVersion";
 
   const router = Router();
   const svc = agentService(db);
@@ -575,9 +577,10 @@ export function agentRoutes(db: Db) {
     const promptTemplate = typeof adapterConfig.promptTemplate === "string"
       ? adapterConfig.promptTemplate
       : "";
-    const files = promptTemplate.trim().length === 0
-      ? await loadDefaultAgentInstructionsBundle(resolveDefaultAgentInstructionsBundleRole(agent.role))
-      : { "AGENTS.md": promptTemplate };
+    const defaultBundle = promptTemplate.trim().length === 0
+      ? await loadDefaultAgentInstructionsBundleWithVersion(resolveDefaultAgentInstructionsBundleRole(agent.role))
+      : null;
+    const files = defaultBundle?.files ?? { "AGENTS.md": promptTemplate };
     const materialized = await instructions.materializeManagedBundle(
       agent,
       files,
@@ -585,6 +588,9 @@ export function agentRoutes(db: Db) {
     );
     const nextAdapterConfig = { ...materialized.adapterConfig };
     delete nextAdapterConfig.promptTemplate;
+    if (defaultBundle) {
+      nextAdapterConfig[MANAGED_INSTRUCTIONS_VERSION_KEY] = defaultBundle.version;
+    }
 
     const updated = await svc.update(agent.id, { adapterConfig: nextAdapterConfig });
     return (updated as T | null) ?? { ...agent, adapterConfig: nextAdapterConfig };
@@ -1752,13 +1758,17 @@ export function agentRoutes(db: Db) {
         continue;
       }
 
-      const materialized = await instructions.materializeManagedBundle(agent, prepared.files, {
+      const preparedBundle = await loadDefaultAgentInstructionsBundleWithVersion(
+        resolveDefaultAgentInstructionsBundleRole(agent.role),
+      );
+      const materialized = await instructions.materializeManagedBundle(agent, preparedBundle.files, {
         entryFile: "AGENTS.md",
         replaceExisting: true,
         clearLegacyPromptTemplate: true,
       });
       const nextAdapterConfig = { ...materialized.adapterConfig };
       delete nextAdapterConfig.promptTemplate;
+      nextAdapterConfig[MANAGED_INSTRUCTIONS_VERSION_KEY] = preparedBundle.version;
       const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
         agent.companyId,
         nextAdapterConfig,

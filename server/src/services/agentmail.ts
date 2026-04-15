@@ -373,6 +373,61 @@ function extractChecklistItems(text: string): AgentmailRequirementItem[] {
   return items;
 }
 
+function extractPlainTextRequirements(text: string): AgentmailRequirementItem[] {
+  const normalized = text.replace(/\r/g, "");
+  const segments = normalized
+    .split(/\n+/)
+    .flatMap((line) => line.split(/\s+(?:and then|and of course)\s+/i))
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const items: AgentmailRequirementItem[] = [];
+  const seen = new Set<string>();
+
+  const pushItem = (candidate: string | null) => {
+    const value = candidate?.trim();
+    if (!value) return;
+    const normalizedValue = value.toLowerCase();
+    if (seen.has(normalizedValue)) return;
+    seen.add(normalizedValue);
+    items.push({ title: value, priority: "medium" });
+  };
+
+  for (const segment of segments) {
+    let candidate = segment
+      .replace(/^>\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!candidate) continue;
+    if (/^\[?\s*project\s*:/i.test(candidate)) continue;
+    if (/^subject\s*:/i.test(candidate)) continue;
+    if (/^[- ]*forwarded message/i.test(candidate)) continue;
+
+    const lower = candidate.toLowerCase();
+    if (lower === "so in the employee handbook i want to add a small detail") continue;
+    if (lower.startsWith("so for the policy it have ")) continue;
+
+    candidate = candidate.replace(/^(?:so|then|also)\s+/i, "");
+
+    if (/^we already have\s+/i.test(candidate)) {
+      candidate = `Reuse ${candidate.replace(/^we already have\s+/i, "").trim()}`;
+    } else {
+      candidate = candidate
+        .replace(/^(?:i|we)\s+want\s+to\s+/i, "")
+        .replace(/^(?:i|we)\s+need\s+to\s+/i, "")
+        .replace(/^(?:i|we)\s+should\s+/i, "")
+        .replace(/^it is just\s+/i, "");
+    }
+
+    candidate = candidate.replace(/[. ]+$/g, "").trim();
+    if (candidate.length < 20) continue;
+
+    pushItem(candidate[0] ? `${candidate[0].toUpperCase()}${candidate.slice(1)}` : candidate);
+    if (items.length >= 8) break;
+  }
+
+  return items;
+}
+
 function extractRequirements(message: AgentmailMessage): RequirementExtraction {
   const requirements = message.requirements ?? null;
   const rawSubject = safeText(message.subject) || "Meeting follow-up";
@@ -395,7 +450,11 @@ function extractRequirements(message: AgentmailMessage): RequirementExtraction {
     || "Meeting follow-up";
   const items = (requirements?.items ?? []).length > 0
     ? requirements?.items ?? []
-    : extractChecklistItems(bodyText);
+    : (() => {
+      const checklistItems = extractChecklistItems(bodyText);
+      if (checklistItems.length > 0) return checklistItems;
+      return extractPlainTextRequirements(bodyText);
+    })();
 
   const forwardedSubject = bodyText ? findForwardedSubjectHeader(bodyText) : null;
   const canonicalForwardedSubject = forwardedSubject ? canonicalizeAgentmailSubject(forwardedSubject) : null;
@@ -438,7 +497,7 @@ type AgentSummary = {
 };
 
 function isProductOwnerAgentRole(role: string) {
-  return role === "pm" || role === "product_analyzer";
+  return role === "pm";
 }
 
 function parseStructuredCommentSections<T extends Record<string, string>>(
@@ -955,9 +1014,7 @@ function pickPmAgent(
     const assigned = active.find((agent) => agent.id === assigneeAgentId && isProductOwnerAgentRole(agent.role));
     if (assigned) return assigned;
   }
-  return active.find((agent) => agent.role === "pm")
-    ?? active.find((agent) => agent.role === "product_analyzer")
-    ?? null;
+  return active.find((agent) => agent.role === "pm") ?? null;
 }
 
 function pickCeoAgent(
@@ -1701,6 +1758,11 @@ export function agentmailService(db: Db) {
             source: "agentmail.ceo_intake.completed",
           });
         } else {
+          await issues.addComment(
+            issue.id,
+            "AgentMail clarification is waiting because no active PM agent is currently available.",
+            { userId: "system-agentmail" },
+          );
           await logActivity(db, {
             companyId: issue.companyId,
             actorType: "agent",

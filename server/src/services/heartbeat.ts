@@ -62,6 +62,12 @@ import {
   resolveSessionCompactionPolicy,
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
+import { agentInstructionsService } from "./agent-instructions.js";
+import {
+  isDefaultManagedInstructionsAdapterType,
+  loadDefaultAgentInstructionsBundleWithVersion,
+  resolveDefaultAgentInstructionsBundleRole,
+} from "./default-agent-instructions.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
@@ -76,6 +82,7 @@ const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INLINE_WAKE_COMMENTS = 8;
 const MAX_INLINE_WAKE_COMMENT_BODY_CHARS = 4_000;
 const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
+const MANAGED_INSTRUCTIONS_VERSION_KEY = "managedInstructionsBundleVersion";
 const execFile = promisify(execFileCallback);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
@@ -685,7 +692,9 @@ export function formatRuntimeWorkspaceWarningLog(warning: string) {
 function describeSessionResetReason(
   contextSnapshot: Record<string, unknown> | null | undefined,
 ) {
-  if (contextSnapshot?.forceFreshSession === true) return "forceFreshSession was requested";
+  if (contextSnapshot?.forceFreshSession === true) {
+    return readNonEmptyString(contextSnapshot?.forceFreshSessionReason) ?? "forceFreshSession was requested";
+  }
 
   const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
   if (wakeReason === "issue_assigned") return "wake reason is issue_assigned";
@@ -1082,6 +1091,7 @@ export function heartbeatService(db: Db) {
   const issuesSvc = issueService(db);
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
+  const instructionsSvc = agentInstructionsService();
   const activeRunExecutions = new Set<string>();
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
@@ -1130,6 +1140,64 @@ export function heartbeatService(db: Db) {
         ),
       )
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function refreshManagedDefaultInstructions(agent: typeof agents.$inferSelect) {
+    if (!isDefaultManagedInstructionsAdapterType(agent.adapterType)) {
+      return {
+        agent,
+        bundleVersion: null as string | null,
+        versionChanged: false,
+      };
+    }
+
+    const bundle = await instructionsSvc.getBundle(agent);
+    if (bundle.mode === "external") {
+      return {
+        agent,
+        bundleVersion: null as string | null,
+        versionChanged: false,
+      };
+    }
+
+    const adapterConfig = parseObject(agent.adapterConfig);
+    const currentVersion = readNonEmptyString(adapterConfig[MANAGED_INSTRUCTIONS_VERSION_KEY]);
+    const prepared = await loadDefaultAgentInstructionsBundleWithVersion(
+      resolveDefaultAgentInstructionsBundleRole(agent.role),
+    );
+    if (currentVersion === prepared.version && bundle.mode === "managed") {
+      return {
+        agent,
+        bundleVersion: prepared.version,
+        versionChanged: false,
+      };
+    }
+
+    const materialized = await instructionsSvc.materializeManagedBundle(agent, prepared.files, {
+      entryFile: "AGENTS.md",
+      replaceExisting: true,
+      clearLegacyPromptTemplate: true,
+    });
+    const nextAdapterConfig: Record<string, unknown> = {
+      ...materialized.adapterConfig,
+      [MANAGED_INSTRUCTIONS_VERSION_KEY]: prepared.version,
+    };
+    delete nextAdapterConfig.promptTemplate;
+
+    await db
+      .update(agents)
+      .set({
+        adapterConfig: nextAdapterConfig,
+        updatedAt: new Date(),
+      })
+      .where(eq(agents.id, agent.id));
+
+    const refreshedAgent = await getAgent(agent.id);
+    return {
+      agent: refreshedAgent ?? { ...agent, adapterConfig: nextAdapterConfig },
+      bundleVersion: prepared.version,
+      versionChanged: true,
+    };
   }
 
   async function getLatestRunForSession(
@@ -1939,7 +2007,7 @@ export function heartbeatService(db: Db) {
 
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
-    const agent = await getAgent(run.agentId);
+    let agent = await getAgent(run.agentId);
     if (!agent) {
       await cancelRunInternal(run.id, "Cancelled because the agent no longer exists");
       return null;
@@ -2266,24 +2334,34 @@ export function heartbeatService(db: Db) {
     activeRunExecutions.add(run.id);
 
     try {
-    const agent = await getAgent(run.agentId);
-    if (!agent) {
-      await setRunStatus(runId, "failed", {
-        error: "Agent not found",
-        errorCode: "agent_not_found",
-        finishedAt: new Date(),
-      });
-      await setWakeupStatus(run.wakeupRequestId, "failed", {
-        finishedAt: new Date(),
-        error: "Agent not found",
-      });
-      const failedRun = await getRun(runId);
-      if (failedRun) await releaseIssueExecutionAndPromote(failedRun);
-      return;
-    }
+      let agent = await getAgent(run.agentId);
+      if (!agent) {
+        await setRunStatus(runId, "failed", {
+          error: "Agent not found",
+          errorCode: "agent_not_found",
+          finishedAt: new Date(),
+        });
+        await setWakeupStatus(run.wakeupRequestId, "failed", {
+          finishedAt: new Date(),
+          error: "Agent not found",
+        });
+        const failedRun = await getRun(runId);
+        if (failedRun) await releaseIssueExecutionAndPromote(failedRun);
+        return;
+      }
 
-    const runtime = await ensureRuntimeState(agent);
-    const context = parseObject(run.contextSnapshot);
+      const runtime = await ensureRuntimeState(agent);
+      const context = parseObject(run.contextSnapshot);
+      const instructionsRefresh = await refreshManagedDefaultInstructions(agent);
+      agent = instructionsRefresh.agent;
+      if (instructionsRefresh.bundleVersion) {
+        context.managedInstructionsBundleVersion = instructionsRefresh.bundleVersion;
+      }
+      if (instructionsRefresh.versionChanged) {
+        context.forceFreshSession = true;
+        context.forceFreshSessionReason =
+          "managed agent instructions changed and require a fresh local-agent session";
+      }
     const taskKey = deriveTaskKeyWithHeartbeatFallback(context, null);
     const sessionCodec = getAdapterSessionCodec(agent.adapterType);
     const issueId = readNonEmptyString(context.issueId);

@@ -293,6 +293,75 @@ Keep the access model aligned with current role permissions.
     }));
   });
 
+  it("does not fall back to Product Analyzer when no PM agent is active", async () => {
+    const { db, getLatestDeliveryPatch } = createDb();
+    const service = agentmailService(db as any);
+
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-1",
+      companyId: "company-1",
+      identifier: "B-42",
+      title: "Need role-based data access",
+      description: "Initial intake",
+      status: "blocked",
+      assigneeAgentId: "ceo-1",
+    });
+
+    mockAgentService.getById.mockResolvedValue({
+      id: "ceo-1",
+      companyId: "company-1",
+      name: "CEO",
+      role: "ceo",
+      status: "active",
+    });
+
+    mockAgentService.list.mockResolvedValue([
+      { id: "ceo-1", name: "CEO", role: "ceo", status: "active" },
+      { id: "analyzer-1", name: "Product Analyzer", role: "product_analyzer", status: "active" },
+    ]);
+
+    const result = await service.handleRequirementReviewComment({
+      issueId: "issue-1",
+      commentId: "comment-1",
+      authorAgentId: "ceo-1",
+      commentBody: `
+<!-- paperclip:agentmail-ceo-intake -->
+## Repo Summary
+The repo already has issue approvals and access-control checks we can reuse.
+
+## Implementation Constraints
+We should narrow the stakeholder request to the roles already modeled in the app.
+
+## PM Follow Up
+Clarify exactly which HR roles need phone-data access.
+
+## Recommended Requirement
+Ask the stakeholder to approve a narrowed role matrix before implementation starts.
+`,
+    });
+
+    expect(result).toEqual({
+      status: "processed",
+      issueId: "issue-1",
+      assigneeAgentId: null,
+    });
+    expect(mockIssueService.update).toHaveBeenCalledWith("issue-1", {
+      status: "blocked",
+      assigneeAgentId: null,
+    });
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(
+      "issue-1",
+      "AgentMail clarification is waiting because no active PM agent is currently available.",
+      { userId: "system-agentmail" },
+    );
+    expect(getLatestDeliveryPatch()).toEqual(expect.objectContaining({
+      outboundStatus: "awaiting_pm_agent",
+      linkedApprovalId: null,
+      approvalStatus: null,
+    }));
+  });
+
   it("hands an approved CEO comment to CTO technical review", async () => {
     const { db, getLatestDeliveryPatch } = createDb();
     const service = agentmailService(db as any);
