@@ -339,12 +339,17 @@ describeEmbeddedPostgres("heartbeat comment wake batching", () => {
       const secondPayload = gateway.getAgentPayloads()[1] ?? {};
       expect(secondPayload.paperclip).toMatchObject({
         wake: {
-          commentIds: [comment2.id, comment3.id],
+          commentIds: [comment3.id],
           latestCommentId: comment3.id,
+          commentWindow: {
+            requestedCount: 2,
+            includedCount: 1,
+          },
+          fallbackFetchNeeded: true,
         },
       });
-      expect(String(secondPayload.message ?? "")).toContain("Second comment");
       expect(String(secondPayload.message ?? "")).toContain("Third comment");
+      expect(String(secondPayload.message ?? "")).not.toContain("Second comment");
       expect(String(secondPayload.message ?? "")).not.toContain("First comment");
     } finally {
       gateway.releaseFirstWait();

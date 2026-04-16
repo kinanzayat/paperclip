@@ -27,7 +27,14 @@ function normalizeMembershipRole(
   membershipRole: string | null | undefined,
 ): CompanyMembershipRole | null {
   if (membershipRole === "owner") return "admin";
-  if (membershipRole === "admin" || membershipRole === "member") return membershipRole;
+  if (
+    membershipRole === "admin"
+    || membershipRole === "member"
+    || membershipRole === "product_owner_head"
+    || membershipRole === "tech_team"
+  ) {
+    return membershipRole;
+  }
   return null;
 }
 

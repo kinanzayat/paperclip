@@ -10,10 +10,12 @@ import {
 import { validate } from "../middleware/validate.js";
 import { logger } from "../middleware/logger.js";
 import {
+  accessService,
   agentmailService,
   approvalService,
   heartbeatService,
   issueApprovalService,
+  issueService,
   logActivity,
   secretService,
 } from "../services/index.js";
@@ -35,12 +37,55 @@ const AGENTMAIL_APPROVAL_TYPES = new Set([
 
 export function approvalRoutes(db: Db) {
   const router = Router();
+  const access = accessService(db);
   const svc = approvalService(db);
   const agentmail = agentmailService(db);
   const heartbeat = heartbeatService(db);
+  const issuesSvc = issueService(db);
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
+
+  function normalizeRequiredRoles(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return Array.from(
+      new Set(
+        value
+          .filter((entry): entry is string => typeof entry === "string")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0),
+      ),
+    );
+  }
+
+  function defaultRequiredRolesForApprovalType(type: string): string[] {
+    if (type === "requirement_product_owner_review") return ["product_owner_head"];
+    if (type === "requirement_tech_review") return ["tech_team"];
+    return [];
+  }
+
+  async function sendRoleStageNotifications(input: {
+    companyId: string;
+    approvalId: string;
+    issueId: string;
+    issueIdentifier: string;
+    issueTitle: string;
+    stage: "product_owner_confirmation_requested" | "tech_review_requested";
+    roleType: "product_owner_head" | "tech_team";
+    payload?: Record<string, unknown>;
+  }) {
+    const roleEmails = await svc.listRoleUserEmails(input.companyId, input.roleType);
+    return agentmail.sendStageNotifications({
+      companyId: input.companyId,
+      issueId: input.issueId,
+      approvalId: input.approvalId,
+      stage: input.stage,
+      issueIdentifier: input.issueIdentifier,
+      issueTitle: input.issueTitle,
+      recipients: roleEmails,
+      payload: input.payload ?? {},
+    });
+  }
 
   router.get("/companies/:companyId/approvals", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -70,6 +115,11 @@ export function approvalRoutes(db: Db) {
       : [];
     const uniqueIssueIds = Array.from(new Set(issueIds));
     const { issueIds: _issueIds, ...approvalInput } = req.body;
+    const requestedRequiredRoles = normalizeRequiredRoles(req.body.requiredRoles);
+    const requiredRoles =
+      requestedRequiredRoles.length > 0
+        ? requestedRequiredRoles
+        : defaultRequiredRolesForApprovalType(approvalInput.type);
     const normalizedPayload =
       approvalInput.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
@@ -83,6 +133,7 @@ export function approvalRoutes(db: Db) {
     const approval = await svc.create(companyId, {
       ...approvalInput,
       payload: normalizedPayload,
+      requiredRoles,
       requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
       requestedByAgentId:
         approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
@@ -92,7 +143,6 @@ export function approvalRoutes(db: Db) {
       decidedAt: null,
       updatedAt: new Date(),
     });
-
     if (uniqueIssueIds.length > 0) {
       await issueApprovalsSvc.linkManyForApproval(approval.id, uniqueIssueIds, {
         agentId: actor.agentId,
@@ -108,8 +158,28 @@ export function approvalRoutes(db: Db) {
       action: "approval.created",
       entityType: "approval",
       entityId: approval.id,
-      details: { type: approval.type, issueIds: uniqueIssueIds },
+      details: { type: approval.type, issueIds: uniqueIssueIds, requiredRoles },
     });
+
+    if (approval.type === "requirement_product_owner_review") {
+      const primaryIssueId = uniqueIssueIds[0]
+        ?? (typeof approval.payload?.issueId === "string" ? approval.payload.issueId : null);
+      if (primaryIssueId) {
+        const linkedIssue = await issuesSvc.getById(primaryIssueId);
+        if (linkedIssue) {
+          await sendRoleStageNotifications({
+            companyId,
+            approvalId: approval.id,
+            issueId: linkedIssue.id,
+            issueIdentifier: linkedIssue.identifier ?? linkedIssue.id,
+            issueTitle: linkedIssue.title,
+            stage: "product_owner_confirmation_requested",
+            roleType: "product_owner_head",
+            payload: { summary: "Requirement review required before technical review can start." },
+          });
+        }
+      }
+    }
 
     res.status(201).json(redactApprovalPayload(approval));
   });
@@ -129,10 +199,39 @@ export function approvalRoutes(db: Db) {
   router.post("/approvals/:id/approve", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
     const id = req.params.id as string;
+    const existingApproval = await svc.getById(id);
+    if (!existingApproval) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    assertCompanyAccess(req, existingApproval.companyId);
+
+    const requiredRoles = normalizeRequiredRoles(existingApproval.requiredRoles);
+    let approvedByRoleType: string | null = null;
+    if (requiredRoles.length > 0) {
+      if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+        approvedByRoleType = requiredRoles[0] ?? null;
+      } else {
+        const userId = req.actor.userId;
+        if (!userId) {
+          res.status(403).json({ error: "Only company members can approve this approval" });
+          return;
+        }
+        const membership = await access.getMembership(existingApproval.companyId, "user", userId);
+        const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
+        if (!membershipRole || !requiredRoles.includes(membershipRole)) {
+          res.status(403).json({ error: `Only ${requiredRoles.join(", ")} members can approve this approval` });
+          return;
+        }
+        approvedByRoleType = membershipRole;
+      }
+    }
+
     const { approval, applied } = await svc.approve(
       id,
       req.body.decidedByUserId ?? "board",
       req.body.decisionNote,
+      { approvedByRoleType },
     );
 
     if (applied) {
@@ -223,6 +322,63 @@ export function approvalRoutes(db: Db) {
           });
         }
       }
+
+      if (approval.type === "requirement_product_owner_review") {
+        const transition = await svc.onProductOwnerApproved(approval.id);
+        if (transition?.nextApproval) {
+          if (linkedIssueIds.length > 0) {
+            await issueApprovalsSvc.linkManyForApproval(transition.nextApproval.id, linkedIssueIds, {
+              userId: req.actor.userId ?? null,
+              agentId: req.actor.agentId,
+            });
+          }
+
+          const issueId = transition.issueId ?? linkedIssueIds[0] ?? null;
+          if (issueId) {
+            const issue = await issuesSvc.getById(issueId);
+            if (issue) {
+              await sendRoleStageNotifications({
+                companyId: approval.companyId,
+                approvalId: transition.nextApproval.id,
+                issueId: issue.id,
+                issueIdentifier: issue.identifier ?? issue.id,
+                issueTitle: issue.title,
+                stage: "tech_review_requested",
+                roleType: "tech_team",
+                payload: { summary: "Product Owner Head approved. Tech team review is now required." },
+              });
+            }
+          }
+        }
+      }
+
+      if (approval.type === "requirement_tech_review") {
+        const assignment = await svc.onTechTeamApprovalResolved(approval.id);
+        if (assignment) {
+          await issuesSvc.update(assignment.issueId, {
+            assigneeAgentId: assignment.agentId,
+            status: "todo",
+          });
+          await issuesSvc.addComment(
+            assignment.issueId,
+            "Tech team approved this requirement. Assigned to CTO for implementation on the same issue card.",
+            { userId: "system" },
+          );
+
+          await logActivity(db, {
+            companyId: approval.companyId,
+            actorType: "user",
+            actorId: req.actor.userId ?? "board",
+            action: "approval.cto_assigned",
+            entityType: "issue",
+            entityId: assignment.issueId,
+            details: {
+              approvalId: approval.id,
+              ctoAgentId: assignment.agentId,
+            },
+          });
+        }
+      }
     }
 
     res.json(redactApprovalPayload(approval));
@@ -231,6 +387,28 @@ export function approvalRoutes(db: Db) {
   router.post("/approvals/:id/reject", validate(resolveApprovalSchema), async (req, res) => {
     assertBoard(req);
     const id = req.params.id as string;
+    const existingApproval = await svc.getById(id);
+    if (!existingApproval) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    assertCompanyAccess(req, existingApproval.companyId);
+
+    const requiredRoles = normalizeRequiredRoles(existingApproval.requiredRoles);
+    if (requiredRoles.length > 0 && !(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)) {
+      const userId = req.actor.userId;
+      if (!userId) {
+        res.status(403).json({ error: "Only company members can reject this approval" });
+        return;
+      }
+      const membership = await access.getMembership(existingApproval.companyId, "user", userId);
+      const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
+      if (!membershipRole || !requiredRoles.includes(membershipRole)) {
+        res.status(403).json({ error: `Only ${requiredRoles.join(", ")} members can reject this approval` });
+        return;
+      }
+    }
+
     const { approval, applied } = await svc.reject(
       id,
       req.body.decidedByUserId ?? "board",
@@ -267,6 +445,28 @@ export function approvalRoutes(db: Db) {
     async (req, res) => {
       assertBoard(req);
       const id = req.params.id as string;
+      const existingApproval = await svc.getById(id);
+      if (!existingApproval) {
+        res.status(404).json({ error: "Approval not found" });
+        return;
+      }
+      assertCompanyAccess(req, existingApproval.companyId);
+
+      const requiredRoles = normalizeRequiredRoles(existingApproval.requiredRoles);
+      if (requiredRoles.length > 0 && !(req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)) {
+        const userId = req.actor.userId;
+        if (!userId) {
+          res.status(403).json({ error: "Only company members can request revision for this approval" });
+          return;
+        }
+        const membership = await access.getMembership(existingApproval.companyId, "user", userId);
+        const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
+        if (!membershipRole || !requiredRoles.includes(membershipRole)) {
+          res.status(403).json({ error: `Only ${requiredRoles.join(", ")} members can request revision` });
+          return;
+        }
+      }
+
       const approval = await svc.requestRevision(
         id,
         req.body.decidedByUserId ?? "board",

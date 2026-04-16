@@ -69,6 +69,7 @@ export function buildCodexLocalConfig(v: CreateConfigValues): Record<string, unk
   const ac: Record<string, unknown> = {};
   if (v.cwd) ac.cwd = v.cwd;
   if (v.instructionsFilePath) ac.instructionsFilePath = v.instructionsFilePath;
+  if (v.contextProfile?.trim()) ac.contextProfile = v.contextProfile.trim().toLowerCase();
   if (v.promptTemplate) ac.promptTemplate = v.promptTemplate;
   if (v.bootstrapPrompt) ac.bootstrapPromptTemplate = v.bootstrapPrompt;
   if (v.model.trim()) ac.model = v.model.trim();

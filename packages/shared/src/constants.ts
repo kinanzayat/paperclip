@@ -276,6 +276,8 @@ export const APPROVAL_TYPES = [
   "agentmail_requirement_confirmation",
   "agentmail_product_owner_confirmation",
   "agentmail_tech_review",
+  "requirement_product_owner_review",
+  "requirement_tech_review",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
@@ -418,7 +420,7 @@ export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
 export const MEMBERSHIP_STATUSES = ["pending", "active", "suspended"] as const;
 export type MembershipStatus = (typeof MEMBERSHIP_STATUSES)[number];
 
-export const COMPANY_MEMBERSHIP_ROLES = ["admin", "member"] as const;
+export const COMPANY_MEMBERSHIP_ROLES = ["admin", "member", "product_owner_head", "tech_team"] as const;
 export type CompanyMembershipRole = (typeof COMPANY_MEMBERSHIP_ROLES)[number];
 
 export const INSTANCE_USER_ROLES = ["instance_admin"] as const;

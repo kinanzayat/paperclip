@@ -290,6 +290,54 @@ function asNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function promptMetricEntries(value: unknown) {
+  const metrics = asRecord(value);
+  if (!metrics) return [] as Array<{ key: string; value: number }>;
+  const orderedKeys = [
+    "promptChars",
+    "instructionsChars",
+    "managedInstructionsInlineChars",
+    "managedInstructionsReferenceChars",
+    "bootstrapPromptChars",
+    "wakePromptChars",
+    "agentmailPlanningChars",
+    "sessionHandoffChars",
+    "heartbeatPromptChars",
+  ];
+  const entries: Array<{ key: string; value: number }> = [];
+  for (const key of orderedKeys) {
+    const raw = metrics[key];
+    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
+    entries.push({ key, value: raw });
+  }
+  return entries;
+}
+
+function promptMetricLabel(key: string) {
+  switch (key) {
+    case "promptChars":
+      return "Total prompt";
+    case "instructionsChars":
+      return "Managed instructions";
+    case "managedInstructionsInlineChars":
+      return "Managed inline";
+    case "managedInstructionsReferenceChars":
+      return "Managed reference";
+    case "bootstrapPromptChars":
+      return "Bootstrap prompt";
+    case "wakePromptChars":
+      return "Wake payload";
+    case "agentmailPlanningChars":
+      return "AgentMail planning";
+    case "sessionHandoffChars":
+      return "Session handoff";
+    case "heartbeatPromptChars":
+      return "Heartbeat prompt";
+    default:
+      return key;
+  }
+}
+
 export function RunInvocationCard({
   payload,
   censorUsernameInLogs,
@@ -297,6 +345,14 @@ export function RunInvocationCard({
   payload: Record<string, unknown>;
   censorUsernameInLogs: boolean;
 }) {
+  const promptMetrics = promptMetricEntries(payload.promptMetrics);
+  const totalPromptChars = promptMetrics.find((entry) => entry.key === "promptChars")?.value ?? 0;
+  const heartbeatPromptChars = promptMetrics.find((entry) => entry.key === "heartbeatPromptChars")?.value ?? 0;
+  const scaffoldingChars = Math.max(0, totalPromptChars - heartbeatPromptChars);
+  const scaffoldingDominates =
+    totalPromptChars > 0 &&
+    scaffoldingChars > heartbeatPromptChars &&
+    scaffoldingChars >= 500;
   const commandLine = [
     typeof payload.command === "string" ? payload.command : null,
     ...(Array.isArray(payload.commandArgs)
@@ -347,6 +403,52 @@ export function RunInvocationCard({
                       </li>
                     ))}
                 </ul>
+              </div>
+            )}
+            {(typeof payload.contextProfile === "string" || typeof payload.repoInstructionsDetected === "boolean") && (
+              <div className="grid gap-1 text-xs sm:grid-cols-2">
+                {typeof payload.contextProfile === "string" && (
+                  <div>
+                    <span className="text-muted-foreground">Context profile: </span>
+                    <span>{payload.contextProfile}</span>
+                  </div>
+                )}
+                {typeof payload.repoInstructionsDetected === "boolean" && (
+                  <div>
+                    <span className="text-muted-foreground">Repo AGENTS.md: </span>
+                    <span>{payload.repoInstructionsDetected ? "detected" : "not detected"}</span>
+                  </div>
+                )}
+                {typeof payload.repoInstructionsPath === "string" && payload.repoInstructionsPath.trim().length > 0 && (
+                  <div className="sm:col-span-2 break-all">
+                    <span className="text-muted-foreground">Repo instructions path: </span>
+                    <span className="font-mono">{payload.repoInstructionsPath}</span>
+                  </div>
+                )}
+              </div>
+            )}
+            {promptMetrics.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs text-muted-foreground">Prompt cost</div>
+                  {scaffoldingDominates && (
+                    <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                      scaffolding dominates
+                    </span>
+                  )}
+                </div>
+                <div className="grid gap-1 text-xs sm:grid-cols-2">
+                  {promptMetrics.map((entry) => (
+                    <div key={entry.key} className="flex items-center justify-between gap-3 rounded border border-border/60 bg-background/50 px-2 py-1">
+                      <span className="text-muted-foreground">{promptMetricLabel(entry.key)}</span>
+                      <span className="font-mono">{entry.value.toLocaleString("en-US")} chars</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between gap-3 rounded border border-border/60 bg-background/50 px-2 py-1">
+                    <span className="text-muted-foreground">Prompt scaffolding</span>
+                    <span className="font-mono">{scaffoldingChars.toLocaleString("en-US")} chars</span>
+                  </div>
+                </div>
               </div>
             )}
             {payload.prompt !== undefined && (

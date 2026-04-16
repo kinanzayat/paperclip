@@ -12,6 +12,8 @@ export const approvals = pgTable(
     requestedByUserId: text("requested_by_user_id"),
     status: text("status").notNull().default("pending"),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    requiredRoles: jsonb("required_roles").$type<string[]>(),
+    approvedByRoleType: text("approved_by_role_type"),
     decisionNote: text("decision_note"),
     decidedByUserId: text("decided_by_user_id"),
     decidedAt: timestamp("decided_at", { withTimezone: true }),

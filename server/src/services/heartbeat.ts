@@ -83,6 +83,11 @@ const MAX_INLINE_WAKE_COMMENTS = 8;
 const MAX_INLINE_WAKE_COMMENT_BODY_CHARS = 4_000;
 const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
 const MANAGED_INSTRUCTIONS_VERSION_KEY = "managedInstructionsBundleVersion";
+const FRESH_SESSION_WAKE_REASONS = new Set([
+  "issue_assigned",
+  "approval_approved",
+  "approval_rejected",
+]);
 const execFile = promisify(execFileCallback);
 const SESSIONED_LOCAL_ADAPTERS = new Set([
   "claude_local",
@@ -678,7 +683,9 @@ export function shouldResetTaskSessionForWake(
   if (contextSnapshot?.forceFreshSession === true) return true;
 
   const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
-  if (wakeReason === "issue_assigned") return true;
+  if (!wakeReason) return false;
+  if (FRESH_SESSION_WAKE_REASONS.has(wakeReason)) return true;
+  if (wakeReason.startsWith("agentmail_")) return true;
   return false;
 }
 
@@ -697,8 +704,58 @@ function describeSessionResetReason(
   }
 
   const wakeReason = readNonEmptyString(contextSnapshot?.wakeReason);
-  if (wakeReason === "issue_assigned") return "wake reason is issue_assigned";
+  if (wakeReason && FRESH_SESSION_WAKE_REASONS.has(wakeReason)) {
+    return `wake reason is ${wakeReason}`;
+  }
+  if (wakeReason?.startsWith("agentmail_")) {
+    return `wake reason ${wakeReason} forces a fresh planning/review session`;
+  }
   return null;
+}
+
+function normalizePromptMetrics(value: unknown): Record<string, number> | null {
+  const parsed = parseObject(value);
+  const normalized: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(parsed)) {
+    if (typeof raw !== "number" || !Number.isFinite(raw)) continue;
+    normalized[key] = Math.max(0, Math.round(raw));
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function computePromptScaffoldingChars(promptMetrics: Record<string, number> | null): number | null {
+  if (!promptMetrics) return null;
+  const promptChars = Math.max(0, Math.round(asNumber(promptMetrics.promptChars, 0)));
+  const heartbeatPromptChars = Math.max(0, Math.round(asNumber(promptMetrics.heartbeatPromptChars, 0)));
+  return Math.max(0, promptChars - heartbeatPromptChars);
+}
+
+function resolveWakeCommentBudget(contextSnapshot: Record<string, unknown>) {
+  const wakeReason = readNonEmptyString(contextSnapshot.wakeReason) ?? "";
+  if (wakeReason === "issue_assigned") {
+    return {
+      maxComments: 0,
+      maxCommentBodyChars: 0,
+      maxBodyTotalChars: 0,
+    };
+  }
+  if (
+    wakeReason === "issue_commented" ||
+    wakeReason === "issue_comment_mentioned" ||
+    wakeReason.startsWith("approval_") ||
+    wakeReason.startsWith("agentmail_")
+  ) {
+    return {
+      maxComments: 1,
+      maxCommentBodyChars: 1_200,
+      maxBodyTotalChars: 1_200,
+    };
+  }
+  return {
+    maxComments: Math.min(2, MAX_INLINE_WAKE_COMMENTS),
+    maxCommentBodyChars: Math.min(1_500, MAX_INLINE_WAKE_COMMENT_BODY_CHARS),
+    maxBodyTotalChars: Math.min(2_400, MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS),
+  };
 }
 
 function deriveCommentId(
@@ -851,8 +908,25 @@ async function buildPaperclipWakePayload(input: {
       }
     | null;
 }) {
-  const commentIds = extractWakeCommentIds(input.contextSnapshot);
-  if (commentIds.length === 0) return null;
+  const requestedCommentIds = extractWakeCommentIds(input.contextSnapshot);
+  const budget = resolveWakeCommentBudget(input.contextSnapshot);
+  if (requestedCommentIds.length === 0 || budget.maxComments <= 0) {
+    return {
+      reason: readNonEmptyString(input.contextSnapshot.wakeReason),
+      issue: input.issueSummary ?? null,
+      commentIds: [],
+      latestCommentId: requestedCommentIds[requestedCommentIds.length - 1] ?? null,
+      comments: [],
+      commentWindow: {
+        requestedCount: requestedCommentIds.length,
+        includedCount: 0,
+        missingCount: requestedCommentIds.length,
+      },
+      truncated: requestedCommentIds.length > 0,
+      fallbackFetchNeeded: requestedCommentIds.length > 0,
+    };
+  }
+  const commentIds = requestedCommentIds.slice(-budget.maxComments);
 
   const issueId = readNonEmptyString(input.contextSnapshot.issueId);
   const issueSummary =
@@ -890,8 +964,8 @@ async function buildPaperclipWakePayload(input: {
 
   const commentsById = new Map(commentRows.map((comment) => [comment.id, comment]));
   const comments: Array<Record<string, unknown>> = [];
-  let remainingBodyChars = MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS;
-  let truncated = false;
+  let remainingBodyChars = budget.maxBodyTotalChars;
+  let truncated = commentIds.length < requestedCommentIds.length;
   let missingCommentCount = 0;
 
   for (const commentId of commentIds) {
@@ -901,13 +975,13 @@ async function buildPaperclipWakePayload(input: {
       missingCommentCount += 1;
       continue;
     }
-    if (comments.length >= MAX_INLINE_WAKE_COMMENTS) {
+    if (comments.length >= budget.maxComments) {
       truncated = true;
       break;
     }
 
     const fullBody = row.body;
-    const allowedBodyChars = Math.min(MAX_INLINE_WAKE_COMMENT_BODY_CHARS, remainingBodyChars);
+    const allowedBodyChars = Math.min(budget.maxCommentBodyChars, remainingBodyChars);
     if (allowedBodyChars <= 0) {
       truncated = true;
       break;
@@ -944,10 +1018,10 @@ async function buildPaperclipWakePayload(input: {
         }
       : null,
     commentIds,
-    latestCommentId: commentIds[commentIds.length - 1] ?? null,
+    latestCommentId: requestedCommentIds[requestedCommentIds.length - 1] ?? null,
     comments,
     commentWindow: {
-      requestedCount: commentIds.length,
+      requestedCount: requestedCommentIds.length,
       includedCount: comments.length,
       missingCount: missingCommentCount,
     },
@@ -2930,7 +3004,13 @@ export function heartbeatService(db: Db) {
           );
         }
       }
+      let latestAdapterInvokeMeta: AdapterInvocationMeta | null = null;
       const onAdapterMeta = async (meta: AdapterInvocationMeta) => {
+        latestAdapterInvokeMeta = {
+          ...meta,
+          env: meta.env ? { ...meta.env } : undefined,
+          promptMetrics: meta.promptMetrics ? { ...meta.promptMetrics } : undefined,
+        };
         if (meta.env && secretKeys.size > 0) {
           for (const key of secretKeys) {
             if (key in meta.env) meta.env[key] = "***REDACTED***";
@@ -3062,9 +3142,15 @@ export function heartbeatService(db: Db) {
             : outcome === "timed_out"
               ? "timed_out"
               : "failed";
+      const adapterInvocationMeta = latestAdapterInvokeMeta as AdapterInvocationMeta | null;
+      const promptMetrics = normalizePromptMetrics(adapterInvocationMeta?.promptMetrics);
+      const promptScaffoldingChars = computePromptScaffoldingChars(promptMetrics);
+      const adapterContextProfile = adapterInvocationMeta?.contextProfile ?? null;
+      const repoInstructionsDetected = adapterInvocationMeta?.repoInstructionsDetected;
+      const repoInstructionsPath = adapterInvocationMeta?.repoInstructionsPath ?? null;
 
       const usageJson =
-        normalizedUsage || adapterResult.costUsd != null
+        normalizedUsage || adapterResult.costUsd != null || promptMetrics
           ? ({
               ...(normalizedUsage ?? {}),
               ...(rawUsage ? {
@@ -3084,6 +3170,13 @@ export function heartbeatService(db: Db) {
               provider: readNonEmptyString(adapterResult.provider) ?? "unknown",
               biller: resolveLedgerBiller(adapterResult),
               model: readNonEmptyString(adapterResult.model) ?? "unknown",
+              ...(promptMetrics ? { promptMetrics } : {}),
+              ...(typeof promptScaffoldingChars === "number" ? { promptScaffoldingChars } : {}),
+              ...(adapterContextProfile ? { contextProfile: adapterContextProfile } : {}),
+              ...(typeof repoInstructionsDetected === "boolean"
+                ? { repoInstructionsDetected }
+                : {}),
+              ...(repoInstructionsPath ? { repoInstructionsPath } : {}),
               ...(adapterResult.costUsd != null ? { costUsd: adapterResult.costUsd } : {}),
               billingType: normalizeLedgerBillingType(adapterResult.billingType),
             } as Record<string, unknown>)

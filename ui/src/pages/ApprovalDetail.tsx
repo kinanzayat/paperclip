@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { approvalsApi } from "../api/approvals";
 import { agentsApi } from "../api/agents";
+import { accessApi } from "../api/access";
+import { authApi } from "../api/auth";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -15,6 +17,29 @@ import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
 import type { ApprovalComment } from "@paperclipai/shared";
 import { MarkdownBody } from "../components/MarkdownBody";
+
+function normalizeRequiredRoles(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((role): role is string => typeof role === "string" && role.trim().length > 0);
+}
+
+function roleLabel(role: string): string {
+  if (role === "product_owner_head") return "Product Owner Head";
+  if (role === "tech_team") return "Tech Team";
+  if (role === "admin") return "Admin";
+  if (role === "member") return "Member";
+  return role.replace(/_/g, " ");
+}
+
+function approvalStageLabel(type: string): string | null {
+  if (type === "requirement_product_owner_review" || type === "agentmail_product_owner_confirmation") {
+    return "Stage 1 of 2";
+  }
+  if (type === "requirement_tech_review" || type === "agentmail_tech_review") {
+    return "Stage 2 of 2";
+  }
+  return null;
+}
 
 export function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
@@ -49,6 +74,17 @@ export function ApprovalDetail() {
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(resolvedCompanyId ?? ""),
     queryFn: () => agentsApi.list(resolvedCompanyId ?? ""),
+    enabled: !!resolvedCompanyId,
+  });
+
+  const { data: session } = useQuery({
+    queryKey: queryKeys.auth.session,
+    queryFn: () => authApi.getSession(),
+  });
+
+  const { data: members } = useQuery({
+    queryKey: resolvedCompanyId ? queryKeys.access.members(resolvedCompanyId) : ["access", "members", "__disabled__"],
+    queryFn: () => accessApi.listMembers(resolvedCompanyId!),
     enabled: !!resolvedCompanyId,
   });
 
@@ -147,8 +183,18 @@ export function ApprovalDetail() {
   const payload = approval.payload as Record<string, unknown>;
   const linkedAgentId = typeof payload.agentId === "string" ? payload.agentId : null;
   const isActionable = approval.status === "pending" || approval.status === "revision_requested";
+  const requiredRoles = normalizeRequiredRoles(approval.requiredRoles);
+  const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
+  const currentMembershipRole = (members ?? [])
+    .find((member) => member.principalType === "user" && member.principalId === currentUserId && member.status === "active")
+    ?.membershipRole ?? null;
+  const roleMatched = requiredRoles.length === 0
+    || session?.user?.isInstanceAdmin === true
+    || (currentMembershipRole ? requiredRoles.includes(currentMembershipRole) : false);
+  const canResolveAction = isActionable && roleMatched;
   const isBudgetApproval = approval.type === "budget_override_required";
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;
+  const stageLabel = approvalStageLabel(approval.type);
   const showApprovedBanner = searchParams.get("resolved") === "approved" && approval.status === "approved";
   const primaryLinkedIssue = linkedIssues?.[0] ?? null;
   const resolvedCta =
@@ -209,6 +255,28 @@ export function ApprovalDetail() {
           </div>
           <StatusBadge status={approval.status} />
         </div>
+        {(stageLabel || requiredRoles.length > 0) && (
+          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            {stageLabel && (
+              <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-muted-foreground">
+                {stageLabel}
+              </span>
+            )}
+            {requiredRoles.map((role) => (
+              <span
+                key={role}
+                className="rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-300"
+              >
+                Requires {roleLabel(role)}
+              </span>
+            ))}
+            {approval.approvedByRoleType && (
+              <span className="rounded-full border border-emerald-300/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-300">
+                Approved by {roleLabel(approval.approvedByRoleType)}
+              </span>
+            )}
+          </div>
+        )}
         <div className="text-sm space-y-1">
           {approval.requestedByAgentId && (
             <div className="flex items-center gap-2">
@@ -261,7 +329,7 @@ export function ApprovalDetail() {
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2">
-          {isActionable && !isBudgetApproval && (
+          {canResolveAction && !isBudgetApproval && (
             <>
               <Button
                 size="sm"
@@ -281,12 +349,17 @@ export function ApprovalDetail() {
               </Button>
             </>
           )}
+          {isActionable && !roleMatched && (
+            <p className="text-sm text-muted-foreground">
+              Only {requiredRoles.map(roleLabel).join(", ")} can resolve this stage.
+            </p>
+          )}
           {isBudgetApproval && approval.status === "pending" && (
             <p className="text-sm text-muted-foreground">
               Resolve this budget stop from the budget controls on <Link to="/costs" className="underline underline-offset-2">/costs</Link>.
             </p>
           )}
-          {approval.status === "pending" && (
+          {approval.status === "pending" && canResolveAction && (
             <Button
               size="sm"
               variant="outline"
@@ -353,6 +426,9 @@ export function ApprovalDetail() {
           placeholder="Add a comment..."
           rows={3}
         />
+        <p className="text-xs text-muted-foreground">
+          You can resolve from comments with commands like @approve, @reject, or @request-revision.
+        </p>
         <div className="flex justify-end">
           <Button
             size="sm"

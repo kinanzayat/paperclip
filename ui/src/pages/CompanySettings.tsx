@@ -58,6 +58,13 @@ const DEFAULT_STATUS_COLORS: Record<IssueStatusCategory, string> = {
   cancelled: "#6b7280",
 };
 
+const MEMBERSHIP_ROLE_OPTIONS: Array<{ value: CompanyMembershipRole; label: string }> = [
+  { value: "member", label: "Member" },
+  { value: "admin", label: "Admin" },
+  { value: "product_owner_head", label: "Product Owner Head" },
+  { value: "tech_team", label: "Tech Team" },
+];
+
 function slugifyStatus(input: string) {
   return input
     .trim()
@@ -1013,12 +1020,13 @@ export function CompanySettings() {
                   })}
                   disabled={updateMemberRoleMutation.isPending}
                 >
-                  <SelectTrigger className="w-[120px]">
+                  <SelectTrigger className="w-[220px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="member">Member</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
+                    {MEMBERSHIP_ROLE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

@@ -32,6 +32,7 @@ import {
   accessService,
   agentmailService,
   agentService,
+  approvalService,
   companyStatusService,
   executionWorkspaceService,
   feedbackService,
@@ -76,6 +77,7 @@ export function issueRoutes(
   const svc = issueService(db);
   const access = accessService(db);
   const agentmail = agentmailService(db);
+  const approvalsSvc = approvalService(db);
   const statusesSvc = companyStatusService(db);
   const heartbeat = heartbeatService(db);
   const feedback = feedbackService(db);
@@ -280,6 +282,176 @@ export function issueRoutes(
       });
     } catch (err) {
       logger.warn({ err, issueId: input.issueId, commentId: input.commentId }, "AgentMail requirement review handling failed");
+    }
+  }
+
+  function parseApprovalKeywordCommand(body: string): {
+    action: "approve" | "reject" | "requestRevision";
+    note: string | null;
+  } | null {
+    const trimmed = body.trim();
+    const match = trimmed.match(/(^|\s)@(approve|reject|request-revision)\b/i);
+    if (!match) return null;
+
+    const rawAction = (match[2] ?? "").toLowerCase();
+    const action =
+      rawAction === "approve"
+        ? "approve"
+        : rawAction === "reject"
+          ? "reject"
+          : "requestRevision";
+    const note = trimmed.replace(/(^|\s)@(approve|reject|request-revision)\b/i, "").trim();
+    return { action, note: note.length > 0 ? note : null };
+  }
+
+  function normalizeRequiredRoles(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value.filter((entry): entry is string => typeof entry === "string")));
+  }
+
+  async function maybeHandleApprovalKeywordComment(input: {
+    issue: { id: string; companyId: string; identifier: string | null; title: string };
+    comment: { id: string; body: string };
+    actor: ReturnType<typeof getActorInfo>;
+  }) {
+    if (input.actor.actorType !== "user") return;
+    const command = parseApprovalKeywordCommand(input.comment.body);
+    if (!command) return;
+
+    const linkedApprovals = await issueApprovalsSvc.listApprovalsForIssue(input.issue.id);
+    if (linkedApprovals.length === 0) return;
+
+    const membership = await access.getMembership(input.issue.companyId, "user", input.actor.actorId);
+    const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
+
+    const actedApprovalIds: string[] = [];
+
+    for (const linkedApproval of linkedApprovals) {
+      if (linkedApproval.status !== "pending" && linkedApproval.status !== "revision_requested") continue;
+
+      const requiredRoles = normalizeRequiredRoles((linkedApproval as Record<string, unknown>).requiredRoles);
+      if (requiredRoles.length > 0 && (!membershipRole || !requiredRoles.includes(membershipRole))) {
+        continue;
+      }
+
+      if (command.action === "approve") {
+        const result = await approvalsSvc.approve(
+          linkedApproval.id,
+          input.actor.actorId,
+          command.note,
+          { approvedByRoleType: membershipRole },
+        );
+        if (!result.applied) continue;
+        actedApprovalIds.push(linkedApproval.id);
+
+        if (
+          linkedApproval.type === "agentmail_requirement_confirmation"
+          || linkedApproval.type === "agentmail_product_owner_confirmation"
+          || linkedApproval.type === "agentmail_tech_review"
+        ) {
+          await agentmail.onApprovalApproved({
+            approvalId: linkedApproval.id,
+            actorType: "user",
+            actorId: input.actor.actorId,
+            note: command.note,
+          });
+        }
+
+        if (linkedApproval.type === "requirement_product_owner_review") {
+          const transition = await approvalsSvc.onProductOwnerApproved(linkedApproval.id);
+          if (transition?.nextApproval) {
+            await issueApprovalsSvc.link(input.issue.id, transition.nextApproval.id, {
+              userId: input.actor.actorId,
+            });
+
+            const roleEmails = await approvalsSvc.listRoleUserEmails(input.issue.companyId, "tech_team");
+            await agentmail.sendStageNotifications({
+              companyId: input.issue.companyId,
+              issueId: input.issue.id,
+              approvalId: transition.nextApproval.id,
+              stage: "tech_review_requested",
+              issueIdentifier: input.issue.identifier ?? input.issue.id,
+              issueTitle: input.issue.title,
+              recipients: roleEmails,
+              payload: { summary: "Product Owner Head approved. Tech team review is now required." },
+            });
+          }
+        }
+
+        if (linkedApproval.type === "requirement_tech_review") {
+          const assignment = await approvalsSvc.onTechTeamApprovalResolved(linkedApproval.id);
+          if (assignment) {
+            await svc.update(assignment.issueId, {
+              assigneeAgentId: assignment.agentId,
+              status: "todo",
+            });
+            await svc.addComment(
+              assignment.issueId,
+              "Tech team approved this requirement. Assigned to CTO for implementation on the same issue card.",
+              { userId: "system" },
+            );
+          }
+        }
+
+        continue;
+      }
+
+      if (command.action === "reject") {
+        const result = await approvalsSvc.reject(linkedApproval.id, input.actor.actorId, command.note);
+        if (!result.applied) continue;
+        actedApprovalIds.push(linkedApproval.id);
+
+        if (
+          linkedApproval.type === "agentmail_requirement_confirmation"
+          || linkedApproval.type === "agentmail_product_owner_confirmation"
+          || linkedApproval.type === "agentmail_tech_review"
+        ) {
+          await agentmail.onApprovalRejected({
+            approvalId: linkedApproval.id,
+            actorType: "user",
+            actorId: input.actor.actorId,
+            note: command.note,
+            action: "reject",
+          });
+        }
+        continue;
+      }
+
+      const revised = await approvalsSvc.requestRevision(linkedApproval.id, input.actor.actorId, command.note);
+      if (!revised) continue;
+      actedApprovalIds.push(linkedApproval.id);
+
+      if (
+        linkedApproval.type === "agentmail_requirement_confirmation"
+        || linkedApproval.type === "agentmail_product_owner_confirmation"
+        || linkedApproval.type === "agentmail_tech_review"
+      ) {
+        await agentmail.onApprovalRejected({
+          approvalId: linkedApproval.id,
+          actorType: "user",
+          actorId: input.actor.actorId,
+          note: command.note,
+          action: "edit",
+        });
+      }
+    }
+
+    if (actedApprovalIds.length > 0) {
+      await logActivity(db, {
+        companyId: input.issue.companyId,
+        actorType: input.actor.actorType,
+        actorId: input.actor.actorId,
+        agentId: input.actor.agentId,
+        runId: input.actor.runId,
+        action: "issue.comment_approval_command",
+        entityType: "issue",
+        entityId: input.issue.id,
+        details: {
+          commentId: input.comment.id,
+          command: command.action,
+          approvalIds: actedApprovalIds,
+        },
+      });
     }
   }
 
@@ -1340,6 +1512,17 @@ export function issueRoutes(
         actorAgentId: actor.agentId ?? null,
       });
 
+      await maybeHandleApprovalKeywordComment({
+        issue: {
+          id: issue.id,
+          companyId: issue.companyId,
+          identifier: issue.identifier ?? null,
+          title: issue.title,
+        },
+        comment: { id: comment.id, body: comment.body },
+        actor,
+      });
+
     }
 
     const assigneeChanged = assigneeWillChange;
@@ -1835,6 +2018,17 @@ export function issueRoutes(
       commentId: comment.id,
       commentBody: req.body.body,
       actorAgentId: actor.agentId ?? null,
+    });
+
+    await maybeHandleApprovalKeywordComment({
+      issue: {
+        id: currentIssue.id,
+        companyId: currentIssue.companyId,
+        identifier: currentIssue.identifier ?? null,
+        title: currentIssue.title,
+      },
+      comment: { id: comment.id, body: comment.body },
+      actor,
     });
 
     // Merge all wakeups from this comment into one enqueue per agent to avoid duplicate runs.

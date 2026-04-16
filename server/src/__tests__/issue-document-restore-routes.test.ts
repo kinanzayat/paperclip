@@ -83,6 +83,12 @@ vi.mock("../services/index.js", () => ({
   agentmailService: () => ({
     handleRequirementReviewComment: vi.fn(async () => ({ status: "ignored" })),
   }),
+  approvalService: () => ({
+    getById: vi.fn(async () => null),
+    approve: vi.fn(async () => ({ approval: null, applied: false })),
+    reject: vi.fn(async () => ({ approval: null, applied: false })),
+    requestRevision: vi.fn(async () => null),
+  }),
   agentService: () => mockAgentService,
   companyStatusService: () => mockCompanyStatusService,
   documentService: () => mockDocumentsService,

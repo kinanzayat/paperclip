@@ -25,6 +25,16 @@ const mockIssueApprovalService = vi.hoisted(() => ({
   linkManyForApproval: vi.fn(),
 }));
 
+const mockAccessService = vi.hoisted(() => ({
+  getMembership: vi.fn(),
+}));
+
+const mockIssueService = vi.hoisted(() => ({
+  getById: vi.fn(),
+  update: vi.fn(),
+  addComment: vi.fn(),
+}));
+
 const mockSecretService = vi.hoisted(() => ({
   normalizeHireApprovalPayloadForPersistence: vi.fn(),
 }));
@@ -37,10 +47,12 @@ const mockAgentmailService = vi.hoisted(() => ({
 const mockLogActivity = vi.hoisted(() => vi.fn());
 
 vi.mock("../services/index.js", () => ({
+  accessService: () => mockAccessService,
   agentmailService: () => mockAgentmailService,
   approvalService: () => mockApprovalService,
   heartbeatService: () => mockHeartbeatService,
   issueApprovalService: () => mockIssueApprovalService,
+  issueService: () => mockIssueService,
   logActivity: mockLogActivity,
   secretService: () => mockSecretService,
 }));
@@ -66,6 +78,18 @@ function createApp() {
 describe("approval routes idempotent retries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockApprovalService.getById.mockResolvedValue({
+      id: "approval-1",
+      companyId: "company-1",
+      type: "hire_agent",
+      status: "pending",
+      payload: {},
+      requiredRoles: null,
+    });
+    mockAccessService.getMembership.mockResolvedValue({ membershipRole: "admin" });
+    mockIssueService.getById.mockResolvedValue({ id: "issue-1", companyId: "company-1", identifier: "PAP-1", title: "Issue" });
+    mockIssueService.update.mockResolvedValue(null);
+    mockIssueService.addComment.mockResolvedValue(null);
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
     mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: "issue-1" }]);
     mockLogActivity.mockResolvedValue(undefined);

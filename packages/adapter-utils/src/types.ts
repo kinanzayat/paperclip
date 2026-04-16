@@ -109,6 +109,9 @@ export interface AdapterInvocationMeta {
   env?: Record<string, string>;
   prompt?: string;
   promptMetrics?: Record<string, number>;
+  contextProfile?: string;
+  repoInstructionsDetected?: boolean;
+  repoInstructionsPath?: string | null;
   context?: Record<string, unknown>;
 }
 
@@ -374,6 +377,7 @@ export interface CreateConfigValues {
   adapterType: string;
   cwd: string;
   instructionsFilePath?: string;
+  contextProfile?: string;
   promptTemplate: string;
   model: string;
   thinkingEffort: string;

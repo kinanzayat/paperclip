@@ -6,10 +6,12 @@ export interface Approval {
   type: ApprovalType;
   requestedByAgentId: string | null;
   requestedByUserId: string | null;
+  requiredRoles: string[] | null;
   status: ApprovalStatus;
   payload: Record<string, unknown>;
   decisionNote: string | null;
   decidedByUserId: string | null;
+  approvedByRoleType: string | null;
   decidedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

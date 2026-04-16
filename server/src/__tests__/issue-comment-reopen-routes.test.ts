@@ -19,9 +19,18 @@ const mockAccessService = vi.hoisted(() => ({
 const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(async () => undefined),
   reportRunActivity: vi.fn(async () => undefined),
-  getRun: vi.fn(async () => null),
-  getActiveRunForAgent: vi.fn(async () => null),
-  cancelRun: vi.fn(async () => null),
+  getRun: vi.fn(),
+  getActiveRunForAgent: vi.fn(),
+  cancelRun: vi.fn(),
+}));
+
+const mockApprovalService = vi.hoisted(() => ({
+  approve: vi.fn(),
+  reject: vi.fn(),
+  requestRevision: vi.fn(),
+  onProductOwnerApproved: vi.fn(),
+  onTechTeamApprovalResolved: vi.fn(),
+  listRoleUserEmails: vi.fn(),
 }));
 
 const mockAgentService = vi.hoisted(() => ({
@@ -84,6 +93,7 @@ vi.mock("../services/index.js", () => ({
   }),
   goalService: () => ({}),
   heartbeatService: () => mockHeartbeatService,
+  approvalService: () => mockApprovalService,
   instanceSettingsService: () => ({
     get: vi.fn(async () => ({
       id: "instance-settings-1",
@@ -94,7 +104,10 @@ vi.mock("../services/index.js", () => ({
     })),
     listCompanyIds: vi.fn(async () => ["company-1"]),
   }),
-  issueApprovalService: () => ({}),
+  issueApprovalService: () => ({
+    listApprovalsForIssue: vi.fn(async () => []),
+    link: vi.fn(async () => null),
+  }),
   issueService: () => mockIssueService,
   logActivity: mockLogActivity,
   projectService: () => ({}),
@@ -138,6 +151,9 @@ function makeIssue(status: "todo" | "done") {
 describe("issue comment reopen routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockHeartbeatService.getRun.mockResolvedValue(null);
+    mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(null);
+    mockHeartbeatService.cancelRun.mockResolvedValue(null);
     mockIssueService.addComment.mockResolvedValue({
       id: "comment-1",
       issueId: "11111111-1111-4111-8111-111111111111",

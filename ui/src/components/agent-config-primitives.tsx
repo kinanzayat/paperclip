@@ -27,6 +27,7 @@ export const help: Record<string, string> = {
   capabilities: "Describes what this agent can do. Shown in the org chart and used for task routing.",
   adapterType: "How this agent runs: local CLI (Claude/Codex/OpenCode), OpenClaw Gateway, spawned process, or generic HTTP webhook.",
   cwd: "Deprecated legacy working directory fallback for local adapters. Existing agents may still carry this value, but new configurations should use project workspaces instead.",
+  contextProfile: "How much static Paperclip-managed context to inject into local Codex runs. Lean keeps prompts small and references managed instructions by path. Full inlines the whole managed bundle on every fresh run.",
   promptTemplate: "Sent on every heartbeat. Keep this small and dynamic. Use it for current-task framing, not large static instructions. Supports {{ agent.id }}, {{ agent.name }}, {{ agent.role }} and other template variables.",
   model: "Override the default model used by the adapter.",
   thinkingEffort: "Control model reasoning depth. Supported values vary by adapter/model.",

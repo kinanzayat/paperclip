@@ -8,6 +8,8 @@ export const typeLabel: Record<string, string> = {
   agentmail_requirement_confirmation: "Legacy Requirement Confirmation",
   agentmail_product_owner_confirmation: "Product Owner Confirmation",
   agentmail_tech_review: "Tech Review",
+  requirement_product_owner_review: "Requirement Product Owner Review",
+  requirement_tech_review: "Requirement Tech Review",
 };
 
 /** Build a contextual label for an approval, e.g. "Hire Agent: Designer" */
@@ -26,6 +28,8 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   agentmail_requirement_confirmation: Mail,
   agentmail_product_owner_confirmation: Mail,
   agentmail_tech_review: Mail,
+  requirement_product_owner_review: Mail,
+  requirement_tech_review: Mail,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -200,6 +204,8 @@ export function ApprovalPayloadRenderer({ type, payload }: { type: string; paylo
   if (type === "budget_override_required") return <BudgetOverridePayload payload={payload} />;
   if (type === "agentmail_requirement_confirmation") return <AgentmailRequirementPayload payload={payload} />;
   if (type === "agentmail_product_owner_confirmation") return <AgentmailProductOwnerPayload payload={payload} />;
+  if (type === "requirement_product_owner_review") return <AgentmailProductOwnerPayload payload={payload} />;
   if (type === "agentmail_tech_review") return <AgentmailTechReviewPayload payload={payload} />;
+  if (type === "requirement_tech_review") return <AgentmailTechReviewPayload payload={payload} />;
   return <CeoStrategyPayload payload={payload} />;
 }

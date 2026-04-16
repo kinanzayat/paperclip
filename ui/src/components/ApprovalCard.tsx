@@ -21,6 +21,9 @@ export function ApprovalCard({
   onReject,
   onOpen,
   detailLink,
+  canResolve = true,
+  stageLabel,
+  requiredRoleLabel,
   isPending,
 }: {
   approval: Approval;
@@ -29,13 +32,17 @@ export function ApprovalCard({
   onReject: () => void;
   onOpen?: () => void;
   detailLink?: string;
+  canResolve?: boolean;
+  stageLabel?: string | null;
+  requiredRoleLabel?: string | null;
   isPending: boolean;
 }) {
   const Icon = typeIcon[approval.type] ?? defaultTypeIcon;
   const label = approvalLabel(approval.type, approval.payload as Record<string, unknown> | null);
   const showResolutionButtons =
     approval.type !== "budget_override_required" &&
-    (approval.status === "pending" || approval.status === "revision_requested");
+    (approval.status === "pending" || approval.status === "revision_requested") &&
+    canResolve;
 
   return (
     <div className="border border-border rounded-lg p-4 space-y-0">
@@ -58,6 +65,21 @@ export function ApprovalCard({
           <span className="text-xs text-muted-foreground">· {timeAgo(approval.createdAt)}</span>
         </div>
       </div>
+
+      {(stageLabel || requiredRoleLabel) && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+          {stageLabel && (
+            <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-muted-foreground">
+              {stageLabel}
+            </span>
+          )}
+          {requiredRoleLabel && (
+            <span className="rounded-full border border-amber-300/30 bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-300">
+              Requires {requiredRoleLabel}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Payload */}
       <ApprovalPayloadRenderer type={approval.type} payload={approval.payload} />
@@ -89,6 +111,11 @@ export function ApprovalCard({
             Reject
           </Button>
         </div>
+      )}
+      {!canResolve && (approval.status === "pending" || approval.status === "revision_requested") && (
+        <p className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
+          This approval is waiting on a different company role.
+        </p>
       )}
       <div className="mt-3">
         {detailLink ? (

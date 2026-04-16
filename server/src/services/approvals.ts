@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals } from "@paperclipai/db";
+import { approvalComments, approvals, companyMemberships, agents, authUsers } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
@@ -39,6 +39,7 @@ export function approvalService(db: Db) {
     targetStatus: "approved" | "rejected",
     decidedByUserId: string,
     decisionNote: string | null | undefined,
+    approvedByRoleType?: string | null,
   ): Promise<ResolutionResult> {
     const existing = await getExistingApproval(id);
     if (!canResolveStatuses.has(existing.status)) {
@@ -57,6 +58,7 @@ export function approvalService(db: Db) {
         status: targetStatus,
         decidedByUserId,
         decisionNote: decisionNote ?? null,
+        approvedByRoleType: targetStatus === "approved" ? (approvedByRoleType ?? null) : null,
         decidedAt: now,
         updatedAt: now,
       })
@@ -122,12 +124,18 @@ export function approvalService(db: Db) {
         .returning()
         .then((rows) => rows[0]),
 
-    approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+    approve: async (
+      id: string,
+      decidedByUserId: string,
+      decisionNote?: string | null,
+      options?: { approvedByRoleType?: string | null },
+    ) => {
       const { approval: updated, applied } = await resolveApproval(
         id,
         "approved",
         decidedByUserId,
         decisionNote,
+        options?.approvedByRoleType,
       );
 
       let hireApprovedAgentId: string | null = null;
@@ -306,6 +314,101 @@ export function approvalService(db: Db) {
         })
         .returning()
         .then((rows) => redactApprovalComment(rows[0], currentUserRedactionOptions.enabled));
+    },
+
+    getMembersWithRole: async (companyId: string, roleType: string) => {
+      return db
+        .select({ principalType: companyMemberships.principalType, principalId: companyMemberships.principalId })
+        .from(companyMemberships)
+        .where(
+          and(
+            eq(companyMemberships.companyId, companyId),
+            eq(companyMemberships.membershipRole, roleType),
+            eq(companyMemberships.status, "active"),
+          ),
+        );
+    },
+
+    listRoleUserEmails: async (companyId: string, roleType: string) => {
+      const rows = await db
+        .select({ email: authUsers.email })
+        .from(companyMemberships)
+        .innerJoin(authUsers, eq(authUsers.id, companyMemberships.principalId))
+        .where(
+          and(
+            eq(companyMemberships.companyId, companyId),
+            eq(companyMemberships.principalType, "user"),
+            eq(companyMemberships.membershipRole, roleType),
+            eq(companyMemberships.status, "active"),
+          ),
+        );
+
+      return Array.from(
+        new Set(
+          rows
+            .map((row) => row.email?.trim().toLowerCase())
+            .filter((value): value is string => Boolean(value)),
+        ),
+      );
+    },
+
+    getCTOAgent: async (companyId: string) => {
+      return db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.companyId, companyId), eq(agents.role, "cto")))
+        .then((rows) => rows[0] ?? null);
+    },
+
+    onProductOwnerApproved: async (approvalId: string) => {
+      const approval = await getExistingApproval(approvalId);
+      if (approval.type !== "requirement_product_owner_review") {
+        return null;
+      }
+
+      const issueId = typeof approval.payload?.issueId === "string" ? approval.payload.issueId : null;
+      if (!issueId) return null;
+
+      const nextApproval = await db
+        .insert(approvals)
+        .values({
+          companyId: approval.companyId,
+          type: "requirement_tech_review",
+          requestedByAgentId: approval.requestedByAgentId,
+          requestedByUserId: approval.requestedByUserId,
+          requiredRoles: ["tech_team"],
+          payload: approval.payload,
+          status: "pending",
+        })
+        .returning()
+        .then((rows) => rows[0]);
+
+      if (!nextApproval) return null;
+
+      return {
+        nextApproval,
+        issueId,
+      };
+    },
+
+    onTechTeamApprovalResolved: async (approvalId: string) => {
+      const approval = await getExistingApproval(approvalId);
+      if (approval.type !== "requirement_tech_review" || approval.status !== "approved") {
+        return null;
+      }
+
+      const issueId = typeof approval.payload?.issueId === "string" ? approval.payload.issueId : null;
+      if (!issueId) return null;
+
+      const ctoAgent = await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.companyId, approval.companyId), eq(agents.role, "cto")))
+        .then((rows) => rows[0] ?? null);
+
+      if (!ctoAgent) return null;
+
+      return { issueId, agentId: ctoAgent.id };
     },
   };
 }

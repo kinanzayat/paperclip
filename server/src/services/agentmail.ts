@@ -85,6 +85,12 @@ const AGENTMAIL_LEGACY_REQUIREMENT_APPROVAL_TYPE = "agentmail_requirement_confir
 const AGENTMAIL_PRODUCT_OWNER_APPROVAL_TYPE = "agentmail_product_owner_confirmation";
 const AGENTMAIL_TECH_REVIEW_APPROVAL_TYPE = "agentmail_tech_review";
 
+function defaultRequiredRolesForApprovalType(type: string): string[] {
+  if (type === AGENTMAIL_PRODUCT_OWNER_APPROVAL_TYPE) return ["product_owner_head"];
+  if (type === AGENTMAIL_TECH_REVIEW_APPROVAL_TYPE) return ["tech_team"];
+  return [];
+}
+
 const CTO_INTAKE_SECTION_KEYS = {
   "repo summary": "repoSummary",
   "implementation constraints": "implementationConstraints",
@@ -1169,6 +1175,67 @@ export function agentmailService(db: Db) {
     return latestDelivery;
   }
 
+  async function notifyRoleStage(input: {
+    companyId: string;
+    deliveryId: string | null;
+    issueId: string;
+    approvalId: string;
+    stage: AgentmailNotificationStage;
+    roleType: "product_owner_head" | "tech_team";
+    fallbackRecipient: string | null;
+    issueIdentifier: string;
+    issueTitle: string;
+    sourceMessageId: string;
+    payload: Record<string, unknown>;
+  }) {
+    const roleRecipients = await approvalsSvc.listRoleUserEmails(input.companyId, input.roleType);
+    const recipients = Array.from(
+      new Set(
+        [...roleRecipients, normalizeEmail(input.fallbackRecipient)]
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    if (recipients.length === 0) {
+      const skipped = await sendAgentmailNotification(db, {
+        companyId: input.companyId,
+        deliveryId: input.deliveryId,
+        issueId: input.issueId,
+        approvalId: input.approvalId,
+        stage: input.stage,
+        recipient: null,
+        issueIdentifier: input.issueIdentifier,
+        issueTitle: input.issueTitle,
+        projectName: null,
+        sourceMessageId: input.sourceMessageId,
+        payload: input.payload,
+      });
+      return { primaryNotification: skipped, notifications: [skipped] };
+    }
+
+    const notifications: Array<Awaited<ReturnType<typeof sendAgentmailNotification>>> = [];
+    for (const recipient of recipients) {
+      notifications.push(await sendAgentmailNotification(db, {
+        companyId: input.companyId,
+        deliveryId: input.deliveryId,
+        issueId: input.issueId,
+        approvalId: input.approvalId,
+        stage: input.stage,
+        recipient,
+        issueIdentifier: input.issueIdentifier,
+        issueTitle: input.issueTitle,
+        projectName: null,
+        sourceMessageId: input.sourceMessageId,
+        payload: input.payload,
+      }));
+    }
+
+    return {
+      primaryNotification: notifications.find((notification) => notification.status === "sent") ?? notifications[0],
+      notifications,
+    };
+  }
+
   async function resolveIssueForApproval(approvalId: string) {
     const approval = await approvalsSvc.getById(approvalId);
     if (!approval) return null;
@@ -1192,8 +1259,11 @@ export function agentmailService(db: Db) {
     type: string;
     payload: Record<string, unknown>;
     requestedByAgentId: string | null;
+    requiredRoles?: string[] | null;
     linkActorAgentId?: string | null;
   }) {
+    const requiredRoles = (input.requiredRoles ?? defaultRequiredRolesForApprovalType(input.type))
+      .filter((role): role is string => typeof role === "string" && role.trim().length > 0);
     const latestApproval = await getLatestStageApprovalForIssue(input.issueId, input.type);
     if (latestApproval?.status === "pending") {
       const approval = await approvalsSvc.updatePayload(latestApproval.id, input.payload);
@@ -1209,6 +1279,7 @@ export function agentmailService(db: Db) {
       requestedByAgentId: input.requestedByAgentId,
       requestedByUserId: null,
       status: "pending",
+      requiredRoles,
       payload: input.payload,
       decisionNote: null,
       decidedByUserId: null,
@@ -1408,16 +1479,16 @@ export function agentmailService(db: Db) {
           payload: techApprovalPayload,
           requestedByAgentId: ctoAgent?.id ?? null,
         });
-        const notification = await sendAgentmailNotification(db, {
+        const { primaryNotification: notification } = await notifyRoleStage({
           companyId: issue.companyId,
           deliveryId: latestDelivery?.id ?? null,
           issueId: issue.id,
           approvalId: techApprovalResult.approval.id,
           stage: "tech_review_requested",
-          recipient: company?.techTeamEmail ?? null,
+          roleType: "tech_team",
+          fallbackRecipient: company?.techTeamEmail ?? null,
           issueIdentifier: issue.identifier ?? issue.id,
           issueTitle: issue.title,
-          projectName: null,
           sourceMessageId: sourceMessage.messageId,
           payload: techApprovalPayload,
         });
@@ -2074,6 +2145,19 @@ export function agentmailService(db: Db) {
         requestedByAgentId: reviewer.id,
         linkActorAgentId: reviewer.id,
       });
+      const { primaryNotification: techReviewNotification } = await notifyRoleStage({
+        companyId: issue.companyId,
+        deliveryId: latestDelivery?.id ?? null,
+        issueId: issue.id,
+        approvalId: techApproval.approval.id,
+        stage: "tech_review_requested",
+        roleType: "tech_team",
+        fallbackRecipient: company?.techTeamEmail ?? null,
+        issueIdentifier: issue.identifier ?? issue.id,
+        issueTitle: issue.title,
+        sourceMessageId: sourceMessage.messageId,
+        payload: techApprovalPayload,
+      });
 
       await issues.update(issue.id, {
         status: "blocked",
@@ -2082,6 +2166,15 @@ export function agentmailService(db: Db) {
       await updateLatestIssueDelivery(issue.companyId, issue.id, {
         linkedApprovalId: techApproval.approval.id,
         approvalStatus: techApproval.approval.status,
+        outboundStatus:
+          techReviewNotification.status === "skipped"
+            ? `skipped_${techReviewNotification.reason}`
+            : techReviewNotification.status,
+        outboundMessageId: techReviewNotification.messageId,
+        outboundThreadId: techReviewNotification.threadId,
+        outboundRecipient: techReviewNotification.recipient,
+        outboundSentAt: techReviewNotification.status === "sent" ? new Date() : null,
+        outboundError: techReviewNotification.error,
       });
 
       await logActivity(db, {
@@ -2142,6 +2235,77 @@ export function agentmailService(db: Db) {
         sourceMessageId: input.sourceMessageId ?? input.approvalId,
         note: input.note ?? null,
       }),
+
+    sendStageNotifications: async (input: {
+      companyId: string;
+      issueId: string;
+      approvalId: string;
+      stage: AgentmailNotificationStage;
+      issueIdentifier: string;
+      issueTitle: string;
+      recipients: string[];
+      payload?: Record<string, unknown>;
+      projectName?: string | null;
+      sourceMessageId?: string | null;
+      deliveryId?: string | null;
+    }) => {
+      const recipients = Array.from(
+        new Set(
+          input.recipients
+            .map((email) => normalizeEmail(email))
+            .filter((value): value is string => Boolean(value)),
+        ),
+      );
+
+      const results = [] as Array<{
+        recipient: string | null;
+        status: "sent" | "skipped";
+        reason: string | null;
+        messageId: string | null;
+        threadId: string | null;
+        error: string | null;
+        notificationId: string | null;
+      }>;
+
+      for (const recipient of recipients) {
+        try {
+          const result = await sendAgentmailNotification(db, {
+            companyId: input.companyId,
+            deliveryId: input.deliveryId ?? null,
+            issueId: input.issueId,
+            approvalId: input.approvalId,
+            stage: input.stage,
+            recipient,
+            issueIdentifier: input.issueIdentifier,
+            issueTitle: input.issueTitle,
+            projectName: input.projectName ?? null,
+            sourceMessageId: input.sourceMessageId ?? null,
+            payload: input.payload ?? {},
+          });
+          results.push({
+            recipient: result.recipient,
+            status: result.status,
+            reason: result.reason,
+            messageId: result.messageId,
+            threadId: result.threadId,
+            error: result.error,
+            notificationId: result.notificationId,
+          });
+        } catch (err) {
+          results.push({
+            recipient,
+            status: "skipped",
+            reason: "send_failed",
+            messageId: null,
+            threadId: null,
+            error: err instanceof Error ? err.message : String(err),
+            notificationId: null,
+          });
+        }
+      }
+
+      return results;
+    },
 
     processInboundMessage: async (
       companyId: string,

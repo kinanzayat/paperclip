@@ -36,6 +36,16 @@ const ADAPTER_MANAGED_SESSION_POLICY: SessionCompactionPolicy = {
   maxSessionAgeHours: 0,
 };
 
+// Codex resumes sessions well, but Paperclip issue workflows churn across
+// small tasks quickly. Use earlier rotation to avoid stale cross-issue context
+// and runaway prompt growth.
+const LEAN_CODEX_LOCAL_SESSION_POLICY: SessionCompactionPolicy = {
+  enabled: true,
+  maxSessionRuns: 12,
+  maxRawInputTokens: 250_000,
+  maxSessionAgeHours: 24,
+};
+
 export const LEGACY_SESSIONED_ADAPTER_TYPES = new Set([
   "claude_local",
   "codex_local",
@@ -55,7 +65,7 @@ export const ADAPTER_SESSION_MANAGEMENT: Record<string, AdapterSessionManagement
   codex_local: {
     supportsSessionResume: true,
     nativeContextManagement: "confirmed",
-    defaultSessionCompaction: ADAPTER_MANAGED_SESSION_POLICY,
+    defaultSessionCompaction: LEAN_CODEX_LOCAL_SESSION_POLICY,
   },
   cursor: {
     supportsSessionResume: true,

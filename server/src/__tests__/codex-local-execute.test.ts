@@ -169,12 +169,13 @@ describe("codex execute", () => {
     }
   });
 
-  it("emits a command note that Codex auto-applies repo-scoped AGENTS.md files", async () => {
+  it("reports repo-scoped AGENTS detection in invocation notes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-notes-"));
     const workspace = path.join(root, "workspace");
     const commandPath = path.join(root, "codex");
     const capturePath = path.join(root, "capture.json");
     await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, "AGENTS.md"), "Repo instructions\n", "utf8");
     await writeFakeCodexCommand(commandPath);
 
     const previousHome = process.env.HOME;
@@ -215,9 +216,8 @@ describe("codex execute", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.errorMessage).toBeNull();
-      expect(commandNotes).toContain(
-        "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace; Paperclip does not currently suppress that discovery.",
-      );
+      expect(commandNotes).toContain(`Detected repo-scoped AGENTS.md at ${path.join(workspace, "AGENTS.md")}.`);
+      expect(commandNotes).toContain("Kept Paperclip-managed instructions additive-only in lean mode.");
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -452,6 +452,9 @@ describe("codex execute", () => {
       expect(capture.paperclipInstructionsFile).toBe(instructionsPath);
       expect(capture.paperclipInstructionsDir).toBe(path.dirname(instructionsPath));
       expect(capture.paperclipWakeReason).toBe("agentmail_requirement_analysis");
+      expect(capture.prompt).toContain("## Paperclip Managed Instructions");
+      expect(capture.prompt).toContain(`- file: ${instructionsPath}`);
+      expect(capture.prompt).not.toContain("Managed CEO instructions.");
       expect(capture.prompt).toContain("## Paperclip AgentMail Planning Mode");
       expect(capture.prompt).toContain("Do not implement code.");
       expect(capture.prompt).toContain("Do not create child issues, sub-issues, or blocker issues.");
@@ -769,6 +772,68 @@ describe("codex execute", () => {
       else process.env.PAPERCLIP_IN_WORKTREE = previousPaperclipInWorktree;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still supports full managed instruction inlining when explicitly requested", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-full-context-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "codex");
+    const capturePath = path.join(root, "capture.json");
+    const instructionsPath = path.join(root, "AGENTS.md");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(instructionsPath, "Managed CEO instructions.\n", "utf8");
+    await writeFakeCodexCommand(commandPath);
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      let promptMetrics: Record<string, number> = {};
+      const result = await execute({
+        runId: "run-full-context",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "CEO",
+          adapterType: "codex_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          instructionsFilePath: instructionsPath,
+          contextProfile: "full",
+          env: {
+            PAPERCLIP_TEST_CAPTURE_PATH: capturePath,
+          },
+          promptTemplate: "Normal heartbeat prompt.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+        onMeta: async (meta) => {
+          promptMetrics = meta.promptMetrics ?? {};
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.errorMessage).toBeNull();
+
+      const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
+      expect(capture.prompt).toContain("Managed CEO instructions.");
+      expect(promptMetrics.managedInstructionsInlineChars).toBeGreaterThan(0);
+      expect(promptMetrics.managedInstructionsReferenceChars).toBe(0);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
       await fs.rm(root, { recursive: true, force: true });
     }
   });

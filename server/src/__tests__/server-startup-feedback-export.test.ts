@@ -125,6 +125,13 @@ vi.mock("../services/index.js", () => ({
   })),
 }));
 
+vi.mock("../services/agentmail-inbound.js", () => ({
+  agentmailInboundListener: {
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(async () => undefined),
+  },
+}));
+
 vi.mock("../storage/index.js", () => ({
   createStorageServiceFromConfig: vi.fn(() => ({ id: "storage-service" })),
 }));

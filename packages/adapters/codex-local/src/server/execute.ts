@@ -39,6 +39,9 @@ const AGENTMAIL_PLANNING_WAKE_REASONS = new Set([
   "agentmail_ceo_approval_requested",
   "agentmail_tech_review_requested",
 ]);
+const CODEX_CONTEXT_PROFILES = new Set(["lean", "balanced", "full"]);
+
+type ContextProfile = "lean" | "balanced" | "full";
 
 function stripCodexRolloutNoise(text: string): string {
   const parts = text.split(/\r?\n/);
@@ -153,6 +156,96 @@ function resolveCodexSkillsDir(codexHome: string): string {
 
 function resolveInstructionsPath(candidatePath: string, cwd: string): string {
   return path.isAbsolute(candidatePath) ? candidatePath : path.resolve(cwd, candidatePath);
+}
+
+function resolveContextProfile(config: Record<string, unknown>): ContextProfile {
+  const raw = asString(config.contextProfile, "").trim().toLowerCase();
+  return CODEX_CONTEXT_PROFILES.has(raw) ? (raw as ContextProfile) : "lean";
+}
+
+async function findRepoScopedAgentsFile(startDir: string): Promise<string | null> {
+  let cursor = path.resolve(startDir);
+  for (let depth = 0; depth < 12; depth += 1) {
+    const candidate = path.join(cursor, "AGENTS.md");
+    if (await pathExists(candidate)) return candidate;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return null;
+}
+
+async function buildManagedInstructionsPrompt(input: {
+  instructionsFilePath: string;
+  contextProfile: ContextProfile;
+}): Promise<{
+  prompt: string;
+  inlineChars: number;
+  referenceChars: number;
+  mode: "none" | "missing" | "reference" | "inline";
+}> {
+  const { instructionsFilePath, contextProfile } = input;
+  if (!instructionsFilePath) {
+    return {
+      prompt: "",
+      inlineChars: 0,
+      referenceChars: 0,
+      mode: "none",
+    };
+  }
+  if (!(await pathExists(instructionsFilePath))) {
+    return {
+      prompt: "",
+      inlineChars: 0,
+      referenceChars: 0,
+      mode: "missing",
+    };
+  }
+
+  const instructionsDir = `${path.dirname(instructionsFilePath)}/`;
+  if (contextProfile === "full") {
+    try {
+      const instructionsContents = await fs.readFile(instructionsFilePath, "utf8");
+      const prompt =
+        `${instructionsContents}\n\n` +
+        `The above agent instructions were loaded from ${instructionsFilePath}. ` +
+        `Resolve any relative file references from ${instructionsDir}.\n`;
+      return {
+        prompt,
+        inlineChars: prompt.length,
+        referenceChars: 0,
+        mode: "inline",
+      };
+    } catch {
+      return {
+        prompt: "",
+        inlineChars: 0,
+        referenceChars: 0,
+        mode: "missing",
+      };
+    }
+  }
+
+  const prompt = contextProfile === "balanced"
+    ? [
+        "## Paperclip Managed Instructions",
+        `Managed instructions file: ${instructionsFilePath}`,
+        `Resolve relative file references from: ${instructionsDir}`,
+        "Treat those instructions as additive company and role policy. Open them only if the current wake actually needs that policy detail.",
+      ].join("\n")
+    : [
+        "## Paperclip Managed Instructions",
+        `- file: ${instructionsFilePath}`,
+        `- relative root: ${instructionsDir}`,
+        "- fetch only if you need company or role policy beyond the current wake.",
+      ].join("\n");
+
+  return {
+    prompt,
+    inlineChars: 0,
+    referenceChars: prompt.length,
+    mode: "reference",
+  };
 }
 
 function buildAgentmailPlanningDirective(wakeReason: string | null): string {
@@ -448,6 +541,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const timeoutSec = asNumber(config.timeoutSec, 0);
   const graceSec = asNumber(config.graceSec, 20);
+  const contextProfile = resolveContextProfile(config);
   const extraArgs = (() => {
     const fromExtraArgs = asStringArray(config.extraArgs);
     if (fromExtraArgs.length > 0) return fromExtraArgs;
@@ -468,26 +562,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     );
   }
   const instructionsDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
-  let instructionsPrefix = "";
-  let instructionsChars = 0;
-  if (instructionsFilePath) {
-    try {
-      const instructionsContents = await fs.readFile(instructionsFilePath, "utf8");
-      instructionsPrefix =
-        `${instructionsContents}\n\n` +
-        `The above agent instructions were loaded from ${instructionsFilePath}. ` +
-        `Resolve any relative file references from ${instructionsDir}.\n\n`;
-      instructionsChars = instructionsPrefix.length;
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      await onLog(
-        "stdout",
-        `[paperclip] Warning: could not read agent instructions file "${instructionsFilePath}": ${reason}\n`,
-      );
-    }
-  }
-  const repoAgentsNote =
-    "Codex exec automatically applies repo-scoped AGENTS.md instructions from the current workspace; Paperclip does not currently suppress that discovery.";
+  const repoInstructionsPath = await findRepoScopedAgentsFile(cwd);
+  const repoInstructionsDetected = Boolean(repoInstructionsPath);
   const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, "");
   const templateData = {
     agentId: agent.id,
@@ -505,35 +581,68 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: Boolean(sessionId) });
   const agentmailPlanningPrompt = buildAgentmailPlanningDirective(wakeReason);
   const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
-  const promptInstructionsPrefix = shouldUseResumeDeltaPrompt ? "" : instructionsPrefix;
-  instructionsChars = promptInstructionsPrefix.length;
+  const managedInstructions =
+    shouldUseResumeDeltaPrompt
+      ? {
+          prompt: "",
+          inlineChars: 0,
+          referenceChars: 0,
+          mode: "none" as const,
+        }
+      : await buildManagedInstructionsPrompt({
+          instructionsFilePath,
+          contextProfile,
+        });
+  if (managedInstructions.mode === "missing" && instructionsFilePath) {
+    await onLog(
+      "stdout",
+      `[paperclip] Warning: could not access agent instructions file "${instructionsFilePath}". Continuing without injected managed instructions.\n`,
+    );
+  }
+  const promptInstructionsPrefix = managedInstructions.prompt;
+  const instructionsChars = promptInstructionsPrefix.length;
   const commandNotes = (() => {
     const planningNotes = agentmailPlanningPrompt.length > 0
       ? [`Injected AgentMail planning guardrails for wake reason ${wakeReason}.`]
       : [];
+    const repoNotes = repoInstructionsDetected
+      ? [
+          `Detected repo-scoped AGENTS.md at ${repoInstructionsPath}.`,
+          contextProfile === "full"
+            ? "Paperclip still cannot suppress repo-scoped AGENTS.md discovery in Codex exec mode."
+            : `Kept Paperclip-managed instructions additive-only in ${contextProfile} mode.`,
+        ]
+      : ["No repo-scoped AGENTS.md detected from the current workspace root scan."];
     if (!instructionsFilePath) {
-      return [...planningNotes, repoAgentsNote];
+      return [...planningNotes, ...repoNotes];
     }
-    if (instructionsPrefix.length > 0) {
-      if (shouldUseResumeDeltaPrompt) {
-        return [
-          `Loaded agent instructions from ${instructionsFilePath}`,
-          "Skipped stdin instruction reinjection because an existing Codex session is being resumed with a wake delta.",
-          ...planningNotes,
-          repoAgentsNote,
-        ];
-      }
+    if (shouldUseResumeDeltaPrompt) {
       return [
         `Loaded agent instructions from ${instructionsFilePath}`,
-        `Prepended instructions + path directive to stdin prompt (relative references from ${instructionsDir}).`,
+        "Skipped stdin instruction reinjection because an existing Codex session is being resumed with a wake delta.",
         ...planningNotes,
-        repoAgentsNote,
+        ...repoNotes,
+      ];
+    }
+    if (managedInstructions.mode === "inline") {
+      return [
+        `Loaded agent instructions from ${instructionsFilePath}`,
+        `Prepended the full managed instructions bundle to stdin prompt in ${contextProfile} mode (relative references from ${instructionsDir}).`,
+        ...planningNotes,
+        ...repoNotes,
+      ];
+    }
+    if (managedInstructions.mode === "reference") {
+      return [
+        `Referenced managed instructions from ${instructionsFilePath} without inlining the full bundle (${contextProfile} mode).`,
+        ...planningNotes,
+        ...repoNotes,
       ];
     }
     return [
       `Configured instructionsFilePath ${instructionsFilePath}, but file could not be read; continuing without injected instructions.`,
       ...planningNotes,
-      repoAgentsNote,
+      ...repoNotes,
     ];
   })();
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
@@ -549,6 +658,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const promptMetrics = {
     promptChars: prompt.length,
     instructionsChars,
+    managedInstructionsInlineChars: managedInstructions.inlineChars,
+    managedInstructionsReferenceChars: managedInstructions.referenceChars,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     wakePromptChars: wakePrompt.length,
     agentmailPlanningChars: agentmailPlanningPrompt.length,
@@ -583,6 +694,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         env: loggedEnv,
         prompt,
         promptMetrics,
+        contextProfile,
+        repoInstructionsDetected,
+        repoInstructionsPath,
         context,
       });
     }

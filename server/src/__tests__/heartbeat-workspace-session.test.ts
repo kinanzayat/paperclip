@@ -272,6 +272,20 @@ describe("shouldResetTaskSessionForWake", () => {
     expect(shouldResetTaskSessionForWake({ wakeReason: "issue_assigned" })).toBe(true);
   });
 
+  it("resets session context on AgentMail planning and approval wakes", () => {
+    expect(
+      shouldResetTaskSessionForWake({ wakeReason: "agentmail_requirement_analysis" }),
+    ).toBe(true);
+    expect(
+      shouldResetTaskSessionForWake({ wakeReason: "agentmail_ceo_approval_requested" }),
+    ).toBe(true);
+  });
+
+  it("resets session context on approval result wakes", () => {
+    expect(shouldResetTaskSessionForWake({ wakeReason: "approval_approved" })).toBe(true);
+    expect(shouldResetTaskSessionForWake({ wakeReason: "approval_rejected" })).toBe(true);
+  });
+
   it("preserves session context on timer heartbeats", () => {
     expect(shouldResetTaskSessionForWake({ wakeSource: "timer" })).toBe(false);
   });
@@ -482,12 +496,12 @@ describe("prioritizeProjectWorkspaceCandidatesForRun", () => {
 });
 
 describe("parseSessionCompactionPolicy", () => {
-  it("disables Paperclip-managed rotation by default for codex and claude local", () => {
+  it("uses leaner default rotation for codex local while keeping claude local adapter-managed", () => {
     expect(parseSessionCompactionPolicy(buildAgent("codex_local"))).toEqual({
       enabled: true,
-      maxSessionRuns: 0,
-      maxRawInputTokens: 0,
-      maxSessionAgeHours: 0,
+      maxSessionRuns: 12,
+      maxRawInputTokens: 250_000,
+      maxSessionAgeHours: 24,
     });
     expect(parseSessionCompactionPolicy(buildAgent("claude_local"))).toEqual({
       enabled: true,
@@ -528,7 +542,7 @@ describe("parseSessionCompactionPolicy", () => {
       enabled: true,
       maxSessionRuns: 25,
       maxRawInputTokens: 500_000,
-      maxSessionAgeHours: 0,
+      maxSessionAgeHours: 24,
     });
   });
 });

@@ -11,7 +11,12 @@ import { LocalWorkspaceRuntimeFields } from "../local-workspace-runtime-fields";
 const inputClass =
   "w-full rounded-md border border-border px-2.5 py-1.5 bg-transparent outline-none text-sm font-mono placeholder:text-muted-foreground/40";
 const instructionsFileHint =
-  "Absolute path to a markdown file (e.g. AGENTS.md) that defines this agent's behavior. Injected into the system prompt at runtime. Note: Codex may still auto-apply repo-scoped AGENTS.md files from the workspace.";
+  "Absolute path to a markdown file (e.g. AGENTS.md) that defines this agent's behavior. Lean and balanced modes reference it by path; full mode inlines it into fresh prompts. Codex may still auto-apply repo-scoped AGENTS.md files from the workspace.";
+const contextProfileOptions = [
+  { value: "lean", label: "Lean" },
+  { value: "balanced", label: "Balanced" },
+  { value: "full", label: "Full" },
+] as const;
 
 export function CodexLocalConfigFields({
   mode,
@@ -56,6 +61,27 @@ export function CodexLocalConfigFields({
           </div>
         </Field>
       )}
+      <Field label="Context profile" hint={help.contextProfile}>
+        <select
+          className={inputClass}
+          value={
+            isCreate
+              ? values!.contextProfile ?? "lean"
+              : eff("adapterConfig", "contextProfile", String(config.contextProfile ?? "lean"))
+          }
+          onChange={(evt) =>
+            isCreate
+              ? set!({ contextProfile: evt.target.value })
+              : mark("adapterConfig", "contextProfile", evt.target.value)
+          }
+        >
+          {contextProfileOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </Field>
       <ToggleField
         label="Bypass sandbox"
         hint={help.dangerouslyBypassSandbox}

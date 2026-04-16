@@ -54,6 +54,8 @@ export function issueApprovalService(db: Db) {
           requestedByUserId: approvals.requestedByUserId,
           status: approvals.status,
           payload: approvals.payload,
+          requiredRoles: approvals.requiredRoles,
+          approvedByRoleType: approvals.approvedByRoleType,
           decisionNote: approvals.decisionNote,
           decidedByUserId: approvals.decidedByUserId,
           decidedAt: approvals.decidedAt,
