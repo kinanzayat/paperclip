@@ -510,7 +510,7 @@ export function agentmailNotebookService(db: Db) {
 
         let notebookId = row.notebookId;
         if (!notebookId) {
-          const created = await runNlm(["notebook", "create", notebookTitle, "--json"]);
+          const created = await runNlm(["notebook", "create", notebookTitle]);
           notebookId = readCommandId(created.stdout, ["notebookId", "notebook_id", "id"]);
           if (!notebookId) {
             throw new Error(`NotebookLM notebook creation did not return an id: ${created.stdout || created.stderr}`);
