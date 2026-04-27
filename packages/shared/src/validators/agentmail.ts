@@ -16,6 +16,16 @@ export const agentmailRequirementsSchema = z.object({
   items: z.array(agentmailRequirementItemSchema).optional().default([]),
 });
 
+export const agentmailAttachmentSchema = z.object({
+  id: z.string().optional().nullable(),
+  filename: z.string().optional().nullable(),
+  mimeType: z.string().optional().nullable(),
+  byteSize: z.number().int().nonnegative().optional().nullable(),
+  downloadUrl: z.string().optional().nullable(),
+  textContent: z.string().optional().nullable(),
+  base64Content: z.string().optional().nullable(),
+}).passthrough();
+
 export const agentmailMessageSchema = z.object({
   messageId: z.string().min(1),
   threadId: z.string().optional().nullable(),
@@ -32,6 +42,7 @@ export const agentmailMessageSchema = z.object({
   receivedAt: z.string().datetime().optional().nullable(),
   fireflies: z.record(z.unknown()).optional().nullable(),
   requirements: agentmailRequirementsSchema.optional().nullable(),
+  attachments: z.array(agentmailAttachmentSchema).optional().default([]),
 }).passthrough();
 
 export const agentmailWebhookEnvelopeSchema = z.object({
@@ -46,5 +57,6 @@ export const agentmailWebhookBodySchema = z.union([
 
 export type AgentmailRequirementItem = z.infer<typeof agentmailRequirementItemSchema>;
 export type AgentmailRequirements = z.infer<typeof agentmailRequirementsSchema>;
+export type AgentmailAttachment = z.infer<typeof agentmailAttachmentSchema>;
 export type AgentmailMessage = z.infer<typeof agentmailMessageSchema>;
 export type AgentmailWebhookBody = z.infer<typeof agentmailWebhookBodySchema>;

@@ -47,6 +47,7 @@ import {
   routineService,
   workProductService,
 } from "../services/index.js";
+import { agentmailNotebookService } from "../services/agentmail-notebooklm.js";
 import { logger } from "../middleware/logger.js";
 import { forbidden, HttpError, unauthorized } from "../errors.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -57,6 +58,9 @@ import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
   interrupt: z.boolean().optional(),
+});
+const agentmailNotebookQuerySchema = z.object({
+  question: z.string().min(1).max(4000),
 });
 
 export function issueRoutes(
@@ -77,6 +81,7 @@ export function issueRoutes(
   const svc = issueService(db);
   const access = accessService(db);
   const agentmail = agentmailService(db);
+  const agentmailNotebooks = agentmailNotebookService(db);
   const approvalsSvc = approvalService(db);
   const statusesSvc = companyStatusService(db);
   const heartbeat = heartbeatService(db);
@@ -309,6 +314,18 @@ export function issueRoutes(
     return Array.from(new Set(value.filter((entry): entry is string => typeof entry === "string")));
   }
 
+  function resolveMemberApprovalRole(
+    membership: { approvalRole?: string | null; membershipRole?: string | null } | null | undefined,
+  ): string | null {
+    if (membership?.approvalRole === "product_owner_head" || membership?.approvalRole === "tech_team") {
+      return membership.approvalRole;
+    }
+    if (membership?.membershipRole === "product_owner_head" || membership?.membershipRole === "tech_team") {
+      return membership.membershipRole;
+    }
+    return null;
+  }
+
   async function maybeHandleApprovalKeywordComment(input: {
     issue: { id: string; companyId: string; identifier: string | null; title: string };
     comment: { id: string; body: string };
@@ -322,7 +339,7 @@ export function issueRoutes(
     if (linkedApprovals.length === 0) return;
 
     const membership = await access.getMembership(input.issue.companyId, "user", input.actor.actorId);
-    const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
+    const approvalRole = resolveMemberApprovalRole(membership);
 
     const actedApprovalIds: string[] = [];
 
@@ -330,7 +347,7 @@ export function issueRoutes(
       if (linkedApproval.status !== "pending" && linkedApproval.status !== "revision_requested") continue;
 
       const requiredRoles = normalizeRequiredRoles((linkedApproval as Record<string, unknown>).requiredRoles);
-      if (requiredRoles.length > 0 && (!membershipRole || !requiredRoles.includes(membershipRole))) {
+      if (requiredRoles.length > 0 && (!approvalRole || !requiredRoles.includes(approvalRole))) {
         continue;
       }
 
@@ -339,7 +356,7 @@ export function issueRoutes(
           linkedApproval.id,
           input.actor.actorId,
           command.note,
-          { approvedByRoleType: membershipRole },
+          { approvedByRoleType: approvalRole },
         );
         if (!result.applied) continue;
         actedApprovalIds.push(linkedApproval.id);
@@ -721,11 +738,23 @@ export function issueRoutes(
         ? req.query.wakeCommentId.trim()
         : null;
 
-    const [{ project, goal }, ancestors, commentCursor, wakeComment] = await Promise.all([
+    const [{ project, goal }, ancestors, commentCursor, wakeComment, agentmailNotebook] = await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
       svc.getCommentCursor(issue.id),
       wakeCommentId ? svc.getComment(wakeCommentId) : null,
+      agentmailNotebooks.statusForIssue(issue.id).catch(() => ({
+        enabled: false,
+        status: "unavailable",
+        notebookId: null,
+        notebookTitle: null,
+        messageId: null,
+        threadId: null,
+        error: "AgentMail NotebookLM status is unavailable",
+        lastSyncedAt: null,
+        issueIds: [],
+        sourceMetadata: {},
+      })),
     ]);
 
     res.json({
@@ -772,7 +801,39 @@ export function issueRoutes(
         wakeComment && wakeComment.issueId === issue.id
           ? wakeComment
           : null,
+      agentmailNotebook: {
+        ...agentmailNotebook,
+        statusPath: `/api/issues/${issue.id}/agentmail-notebook`,
+        queryPath: `/api/issues/${issue.id}/agentmail-notebook/query`,
+      },
     });
+  });
+
+  router.get("/issues/:id/agentmail-notebook", async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    res.json(await agentmailNotebooks.statusForIssue(issue.id));
+  });
+
+  router.post("/issues/:id/agentmail-notebook/query", validate(agentmailNotebookQuerySchema), async (req, res) => {
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    const result = await agentmailNotebooks.queryIssueNotebook(issue.id, req.body.question);
+    if (!result.ok) {
+      res.status(409).json(result);
+      return;
+    }
+    res.json(result);
   });
 
   router.get("/issues/:id/work-products", async (req, res) => {

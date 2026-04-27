@@ -499,8 +499,8 @@ describe("parseSessionCompactionPolicy", () => {
   it("uses leaner default rotation for codex local while keeping claude local adapter-managed", () => {
     expect(parseSessionCompactionPolicy(buildAgent("codex_local"))).toEqual({
       enabled: true,
-      maxSessionRuns: 12,
-      maxRawInputTokens: 250_000,
+      maxSessionRuns: 8,
+      maxRawInputTokens: 150_000,
       maxSessionAgeHours: 24,
     });
     expect(parseSessionCompactionPolicy(buildAgent("claude_local"))).toEqual({

@@ -261,11 +261,13 @@ export {
 export {
   agentmailRequirementItemSchema,
   agentmailRequirementsSchema,
+  agentmailAttachmentSchema,
   agentmailMessageSchema,
   agentmailWebhookEnvelopeSchema,
   agentmailWebhookBodySchema,
   type AgentmailRequirementItem,
   type AgentmailRequirements,
+  type AgentmailAttachment,
   type AgentmailMessage,
   type AgentmailWebhookBody,
 } from "./agentmail.js";
@@ -280,8 +282,10 @@ export {
   createCliAuthChallengeSchema,
   resolveCliAuthChallengeSchema,
   companyMembershipRoleSchema,
+  companyApprovalRoleSchema,
   updateMemberPermissionsSchema,
   updateMemberRoleSchema,
+  updateMemberApprovalRoleSchema,
   updateUserCompanyAccessSchema,
   type CreateCompanyInvite,
   type CreateOpenClawInvitePrompt,
@@ -292,8 +296,10 @@ export {
   type CreateCliAuthChallenge,
   type ResolveCliAuthChallenge,
   type CompanyMembershipRoleInput,
+  type CompanyApprovalRoleInput,
   type UpdateMemberPermissions,
   type UpdateMemberRole,
+  type UpdateMemberApprovalRole,
   type UpdateUserCompanyAccess,
 } from "./access.js";
 

@@ -2,6 +2,7 @@ import { and, desc, eq, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentmailOutboundNotifications, agentmailWebhookDeliveries, companies } from "@paperclipai/db";
 import type {
+  AgentmailAttachment,
   AgentmailMessage,
   AgentmailRequirementItem,
   AgentmailWebhookBody,
@@ -12,6 +13,7 @@ import { agentService } from "./agents.js";
 import { heartbeatService } from "./heartbeat.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import { issueService } from "./issues.js";
+import { agentmailNotebookService } from "./agentmail-notebooklm.js";
 import { projectService } from "./projects.js";
 import { logActivity } from "./activity-log.js";
 import { logger } from "../middleware/logger.js";
@@ -213,6 +215,55 @@ function readStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function readNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.trunc(value));
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return Math.max(0, Math.trunc(parsed));
+  }
+  return null;
+}
+
+function normalizeAgentmailAttachments(value: unknown): AgentmailAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map<AgentmailAttachment | null>((entry) => {
+      const record = safeRecord(entry);
+      if (!record) return null;
+      const attachment: AgentmailAttachment = {
+        id: safeText(record.id ?? record.attachmentId ?? record.attachment_id) || null,
+        filename:
+          safeText(record.filename ?? record.fileName ?? record.file_name ?? record.name ?? record.title) || null,
+        mimeType:
+          safeText(record.mimeType ?? record.mime_type ?? record.contentType ?? record.content_type ?? record.type)
+          || null,
+        byteSize: readNumber(record.byteSize ?? record.byte_size ?? record.size ?? record.contentLength),
+        downloadUrl:
+          safeText(record.downloadUrl ?? record.download_url ?? record.url ?? record.href ?? record.signedUrl)
+          || null,
+        textContent:
+          safeText(record.textContent ?? record.text_content ?? record.text ?? record.plainText)
+          || null,
+        base64Content:
+          safeText(record.base64Content ?? record.base64_content ?? record.base64 ?? record.contentBase64)
+          || null,
+      };
+      if (
+        !attachment.id
+        && !attachment.filename
+        && !attachment.mimeType
+        && attachment.byteSize === null
+        && !attachment.downloadUrl
+        && !attachment.textContent
+        && !attachment.base64Content
+      ) {
+        return null;
+      }
+      return attachment;
+    })
+    .filter((entry): entry is AgentmailAttachment => entry !== null);
+}
+
 function readFromSender(value: unknown, fallbackEmail: unknown): { email: string; name?: string } | null {
   const direct = safeRecord(value);
   if (direct) {
@@ -304,6 +355,11 @@ function normalizeIncomingMessageShape(payload: unknown): Record<string, unknown
       ) || null,
     fireflies: safeRecord(nestedMessage.fireflies) ?? null,
     requirements: safeRecord(nestedMessage.requirements) ?? null,
+    attachments: normalizeAgentmailAttachments(
+      nestedMessage.attachments
+        ?? nestedMessage.files
+        ?? nestedMessage.documents,
+    ),
   };
 }
 
@@ -1071,6 +1127,7 @@ export function agentmailService(db: Db) {
   const issueApprovalsSvc = issueApprovalService(db);
   const agentsSvc = agentService(db);
   const heartbeat = heartbeatService(db);
+  const notebooks = agentmailNotebookService(db);
 
   async function getCompanySettings(companyId: string) {
     return db
@@ -1434,6 +1491,7 @@ export function agentmailService(db: Db) {
           receivedAt: null,
           fireflies: null,
           requirements: null,
+          attachments: [],
         }
       : {
           messageId: input.sourceMessageId,
@@ -1447,6 +1505,7 @@ export function agentmailService(db: Db) {
           receivedAt: null,
           fireflies: null,
           requirements: null,
+          attachments: [],
         };
 
     if (approval.type === AGENTMAIL_PRODUCT_OWNER_APPROVAL_TYPE) {
@@ -1778,6 +1837,7 @@ export function agentmailService(db: Db) {
             receivedAt: null,
             fireflies: null,
             requirements: null,
+            attachments: [],
           }
         : {
             messageId: issue.id,
@@ -1791,6 +1851,7 @@ export function agentmailService(db: Db) {
             receivedAt: null,
             fireflies: null,
             requirements: null,
+            attachments: [],
           };
 
       const availableAgents = (await agentsSvc.list(issue.companyId)).map((agent) => ({
@@ -2565,6 +2626,30 @@ export function agentmailService(db: Db) {
             eventType: meta.eventType ?? null,
           },
         });
+
+        if (notebooks.isEnabled()) {
+          setTimeout(() => {
+            void notebooks.syncAgentmailNotebook({
+              companyId,
+              deliveryId: delivery.id,
+              issueId: targetIssue.id,
+              message,
+              extraction: {
+                title: extraction.title,
+                summary: extraction.summary,
+                items: extraction.items,
+                projectReference: extraction.projectReference,
+                rawSubject: extraction.rawSubject,
+                canonicalSubject: extraction.canonicalSubject,
+              },
+            }).catch((err) => {
+              logger.warn(
+                { err, companyId, deliveryId: delivery.id, issueId: targetIssue.id, messageId },
+                "AgentMail NotebookLM sync failed",
+              );
+            });
+          }, 0);
+        }
 
         return {
           status: "processed" as const,

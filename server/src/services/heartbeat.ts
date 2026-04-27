@@ -82,6 +82,9 @@ const MANAGED_WORKSPACE_GIT_CLONE_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INLINE_WAKE_COMMENTS = 8;
 const MAX_INLINE_WAKE_COMMENT_BODY_CHARS = 4_000;
 const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
+const COMPACT_INLINE_WAKE_MAX_COMMENTS = 3;
+const COMPACT_INLINE_WAKE_COMMENT_BODY_CHARS = 2_000;
+const COMPACT_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 4_000;
 const MANAGED_INSTRUCTIONS_VERSION_KEY = "managedInstructionsBundleVersion";
 const FRESH_SESSION_WAKE_REASONS = new Set([
   "issue_assigned",
@@ -730,31 +733,35 @@ function computePromptScaffoldingChars(promptMetrics: Record<string, number> | n
   return Math.max(0, promptChars - heartbeatPromptChars);
 }
 
-function resolveWakeCommentBudget(contextSnapshot: Record<string, unknown>) {
+function resolveWakeCommentBudget(input: {
+  contextSnapshot: Record<string, unknown>;
+  issueCommentCount: number | null;
+}) {
+  const { contextSnapshot, issueCommentCount } = input;
   const wakeReason = readNonEmptyString(contextSnapshot.wakeReason) ?? "";
-  if (wakeReason === "issue_assigned") {
+  const compactWakeReason =
+    wakeReason === "issue_assigned" ||
+    wakeReason === "issue_comment" ||
+    wakeReason === "issue_commented";
+  const useCompactWakeBudget = compactWakeReason && issueCommentCount !== null && issueCommentCount <= 2;
+
+  if (useCompactWakeBudget) {
     return {
-      maxComments: 0,
-      maxCommentBodyChars: 0,
-      maxBodyTotalChars: 0,
+      maxComments: Math.min(COMPACT_INLINE_WAKE_MAX_COMMENTS, MAX_INLINE_WAKE_COMMENTS),
+      maxCommentBodyChars: Math.min(COMPACT_INLINE_WAKE_COMMENT_BODY_CHARS, MAX_INLINE_WAKE_COMMENT_BODY_CHARS),
+      maxBodyTotalChars: Math.min(
+        COMPACT_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS,
+        MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS,
+      ),
+      compactMode: true,
     };
   }
-  if (
-    wakeReason === "issue_commented" ||
-    wakeReason === "issue_comment_mentioned" ||
-    wakeReason.startsWith("approval_") ||
-    wakeReason.startsWith("agentmail_")
-  ) {
-    return {
-      maxComments: 1,
-      maxCommentBodyChars: 1_200,
-      maxBodyTotalChars: 1_200,
-    };
-  }
+
   return {
-    maxComments: Math.min(2, MAX_INLINE_WAKE_COMMENTS),
-    maxCommentBodyChars: Math.min(1_500, MAX_INLINE_WAKE_COMMENT_BODY_CHARS),
-    maxBodyTotalChars: Math.min(2_400, MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS),
+    maxComments: MAX_INLINE_WAKE_COMMENTS,
+    maxCommentBodyChars: MAX_INLINE_WAKE_COMMENT_BODY_CHARS,
+    maxBodyTotalChars: MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS,
+    compactMode: false,
   };
 }
 
@@ -909,7 +916,23 @@ async function buildPaperclipWakePayload(input: {
     | null;
 }) {
   const requestedCommentIds = extractWakeCommentIds(input.contextSnapshot);
-  const budget = resolveWakeCommentBudget(input.contextSnapshot);
+  const issueId = readNonEmptyString(input.contextSnapshot.issueId);
+  const issueCommentCount = issueId
+    ? await input.db
+        .select({ count: sql<number>`count(*)` })
+        .from(issueComments)
+        .where(and(eq(issueComments.companyId, input.companyId), eq(issueComments.issueId, issueId)))
+        .then((rows) => {
+          const rawCount = rows[0]?.count;
+          if (typeof rawCount === "number" && Number.isFinite(rawCount)) return rawCount;
+          const parsed = Number(rawCount);
+          return Number.isFinite(parsed) ? parsed : null;
+        })
+    : null;
+  const budget = resolveWakeCommentBudget({
+    contextSnapshot: input.contextSnapshot,
+    issueCommentCount,
+  });
   if (requestedCommentIds.length === 0 || budget.maxComments <= 0) {
     return {
       reason: readNonEmptyString(input.contextSnapshot.wakeReason),
@@ -923,12 +946,10 @@ async function buildPaperclipWakePayload(input: {
         missingCount: requestedCommentIds.length,
       },
       truncated: requestedCommentIds.length > 0,
-      fallbackFetchNeeded: requestedCommentIds.length > 0,
+      fallbackFetchNeeded: budget.compactMode || requestedCommentIds.length > 0,
     };
   }
   const commentIds = requestedCommentIds.slice(-budget.maxComments);
-
-  const issueId = readNonEmptyString(input.contextSnapshot.issueId);
   const issueSummary =
     input.issueSummary ??
     (issueId
@@ -1026,7 +1047,7 @@ async function buildPaperclipWakePayload(input: {
       missingCount: missingCommentCount,
     },
     truncated,
-    fallbackFetchNeeded: truncated || missingCommentCount > 0,
+    fallbackFetchNeeded: budget.compactMode || truncated || missingCommentCount > 0,
   };
 }
 
@@ -2586,6 +2607,7 @@ export function heartbeatService(db: Db) {
     const runtimeConfig = {
       ...resolvedConfig,
       paperclipRuntimeSkills: runtimeSkillEntries,
+      paperclipAgentRole: agent.role,
     };
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
       companyId: agent.companyId,

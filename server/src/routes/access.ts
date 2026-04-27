@@ -26,6 +26,7 @@ import {
   createOpenClawInvitePromptSchema,
   listJoinRequestsQuerySchema,
   resolveCliAuthChallengeSchema,
+  updateMemberApprovalRoleSchema,
   updateMemberRoleSchema,
   updateMemberPermissionsSchema,
   updateUserCompanyAccessSchema,
@@ -108,6 +109,7 @@ function readSkillMarkdown(skillName: string): string | null {
   const normalized = skillName.trim().toLowerCase();
   if (
     normalized !== "paperclip" &&
+    normalized !== "paperclip-agentmail-notebooklm" &&
     normalized !== "paperclip-create-agent" &&
     normalized !== "paperclip-create-plugin" &&
     normalized !== "para-memory-files"
@@ -1950,6 +1952,7 @@ export function accessRoutes(
     res.json({
       skills: [
         { name: "paperclip", path: "/api/skills/paperclip" },
+        { name: "paperclip-agentmail-notebooklm", path: "/api/skills/paperclip-agentmail-notebooklm" },
         {
           name: "para-memory-files",
           path: "/api/skills/para-memory-files"
@@ -2938,6 +2941,23 @@ export function accessRoutes(
         companyId,
         memberId,
         req.body.membershipRole,
+      );
+      if (!updated) throw notFound("Member not found");
+      res.json(updated);
+    }
+  );
+
+  router.patch(
+    "/companies/:companyId/members/:memberId/approval-role",
+    validate(updateMemberApprovalRoleSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const memberId = req.params.memberId as string;
+      await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      const updated = await access.updateMemberApprovalRole(
+        companyId,
+        memberId,
+        req.body.approvalRole,
       );
       if (!updated) throw notFound("Member not found");
       res.json(updated);

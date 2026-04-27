@@ -1,3 +1,176 @@
+# Start Here: Push This Repo To GitHub And Deploy It On Your Server
+
+This section gives you the exact order to:
+
+1. push this local repo to your GitHub repo
+2. clone that repo on your Linux server
+3. run Paperclip there with Docker Compose
+
+Important notes for this working copy:
+
+- `origin` already exists in this repo and currently points somewhere else, so `git remote add origin ...` will fail here
+- the current branch is `agentMail`, and `git branch -M main` will rename it to `main`
+- your local changes must be committed before they can be pushed
+
+## 1. Create the GitHub repo
+
+Create this empty repository on GitHub first:
+
+```text
+https://github.com/abdulrahman-kharzoum/paperclip-agentmail-openclaw.git
+```
+
+When creating it on GitHub:
+
+- do not add a README
+- do not add a `.gitignore`
+- do not add a license
+
+## 2. Push this local repo to your GitHub
+
+Run these commands from the repo root on your local machine:
+
+```powershell
+git status --short
+git add -A
+git commit -m "Prepare Paperclip fork for deployment"
+git remote set-url origin https://github.com/abdulrahman-kharzoum/paperclip-agentmail-openclaw.git
+git remote -v
+git branch -M main
+git push -u origin main
+```
+
+Notes:
+
+- if `git commit` says there is nothing to commit, that is fine; continue with the next command
+- if GitHub asks for authentication, use your GitHub username and a Personal Access Token, or use GitHub CLI login first
+- after the push, your code will be available at your GitHub repo URL
+
+## 3. Prepare the Linux server
+
+These steps assume Ubuntu or Debian.
+
+SSH into your server, then run:
+
+```bash
+sudo apt update
+sudo apt install -y git docker.io docker-compose-plugin openssl
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+```
+
+Then log out of the server and log back in so the Docker group change takes effect.
+
+Check Docker:
+
+```bash
+docker --version
+docker compose version
+```
+
+## 4. Clone your repo on the server
+
+```bash
+mkdir -p ~/apps
+cd ~/apps
+git clone https://github.com/abdulrahman-kharzoum/paperclip-agentmail-openclaw.git
+cd paperclip-agentmail-openclaw
+git checkout main
+```
+
+## 5. Create the deployment `.env`
+
+Create a `.env` file in the repo root on the server with these values:
+
+```dotenv
+BETTER_AUTH_SECRET=replace-with-openssl-output
+PAPERCLIP_PUBLIC_URL=http://YOUR_SERVER_IP:3100
+PAPERCLIP_PORT=3100
+PAPERCLIP_DATA_DIR=../data/docker-paperclip
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=...
+```
+
+Generate the secret with:
+
+```bash
+openssl rand -hex 32
+```
+
+If you already have a real domain for this server, set:
+
+```dotenv
+PAPERCLIP_PUBLIC_URL=https://your-domain.example
+```
+
+instead of the IP-based URL.
+
+## 6. Build and start Paperclip on the server
+
+From the repo root on the server:
+
+```bash
+docker compose -f docker/docker-compose.quickstart.yml up -d --build
+```
+
+This uses the repo's quickstart deployment:
+
+- Paperclip runs in Docker
+- data is persisted under `data/docker-paperclip`
+- the app is exposed on port `3100` by default
+
+## 7. Check that it started correctly
+
+```bash
+docker compose -f docker/docker-compose.quickstart.yml ps
+docker compose -f docker/docker-compose.quickstart.yml logs -f
+```
+
+Open this in your browser:
+
+```text
+http://YOUR_SERVER_IP:3100
+```
+
+Or, if you configured a domain:
+
+```text
+https://your-domain.example
+```
+
+## 8. Open the firewall if needed
+
+If you use `ufw`, allow the Paperclip port:
+
+```bash
+sudo ufw allow 3100/tcp
+sudo ufw status
+```
+
+If you are putting Paperclip behind Nginx or Apache with HTTPS, expose only `80` and `443` publicly and proxy to the Paperclip container port.
+
+## 9. Update later after new pushes
+
+Whenever you push new code to GitHub, update the server with:
+
+```bash
+cd ~/apps/paperclip-agentmail-openclaw
+git pull origin main
+docker compose -f docker/docker-compose.quickstart.yml up -d --build
+```
+
+## 10. If `git remote add origin ...` fails
+
+In this repo, the correct command is:
+
+```powershell
+git remote set-url origin https://github.com/abdulrahman-kharzoum/paperclip-agentmail-openclaw.git
+```
+
+because `origin` already exists.
+
+---
+
 # Paperclip + AgentMail Setup (Windows + Linux)
 
 This guide sets up AgentMail intake for a local Paperclip instance and exposes Paperclip through a Cloudflare quick tunnel when needed. The recommended inbound mode is now the server-side AgentMail websocket listener, which removes the public inbound webhook dependency entirely. It also documents the recommended stable public `wss://` path for a remote OpenClaw gateway using a cPanel-managed subdomain plus Apache reverse proxy.
@@ -470,3 +643,445 @@ pnpm dev
 	- Header name/value mismatch. Recheck `x-agentmail-webhook-secret`.
 - 404 company not found:
 	- Wrong company id in URL.
+
+---
+
+# Server `.env` And Config Based On Current Local Setup
+
+Use this section when deploying the same current local AgentMail setup to a Linux server.
+
+Your current local Paperclip instance has these important non-secret values:
+
+```dotenv
+PAPERCLIP_DEPLOYMENT_MODE=authenticated
+PAPERCLIP_DEPLOYMENT_EXPOSURE=public
+HOST=0.0.0.0
+PORT=3100
+
+PAPERCLIP_AGENTMAIL_INBOUND_TRANSPORT=websocket
+PAPERCLIP_AGENTMAIL_INBOUND_MAILBOX=codex32@agentmail.to
+PAPERCLIP_AGENTMAIL_INBOUND_COMPANY_ID=1ec0b6dd-9e1d-4fd5-9b0d-37324447b928
+PAPERCLIP_AGENTMAIL_API_BASE_URL=https://api.agentmail.to/v0
+PAPERCLIP_AGENTMAIL_SEND_PATH=/messages
+```
+
+The values below must be copied from your local machine or generated fresh:
+
+```dotenv
+PAPERCLIP_AGENT_JWT_SECRET=<copy-existing-or-generate-new>
+BETTER_AUTH_SECRET=<generate-new-with-openssl>
+PAPERCLIP_AGENTMAIL_API_KEY=<copy-existing-AgentMail-key>
+PAPERCLIP_AGENTMAIL_WEBHOOK_SECRET=<optional-legacy-only>
+OPENAI_API_KEY=<optional>
+ANTHROPIC_API_KEY=<optional>
+```
+
+## Server Env File Path
+
+For the systemd deployment in this guide, use:
+
+```text
+/etc/paperclip/paperclip.env
+```
+
+For the normal Paperclip instance env file, use:
+
+```text
+/var/lib/paperclip/instances/default/.env
+```
+
+Recommended approach:
+
+- Put the main systemd runtime env in `/etc/paperclip/paperclip.env`.
+- Let the quick-tunnel script write the current public URL into `/var/lib/paperclip/instances/default/.env` if you want the Paperclip instance env file to mirror the current tunnel URL.
+- Env vars exported by systemd and the start script override stale values in `config.json`.
+
+## Exact Server Env Template
+
+Create:
+
+```bash
+sudo mkdir -p /etc/paperclip
+sudo nano /etc/paperclip/paperclip.env
+```
+
+Use this template:
+
+```dotenv
+NODE_ENV=production
+SERVE_UI=true
+HOST=0.0.0.0
+PORT=3100
+
+PAPERCLIP_HOME=/var/lib/paperclip
+PAPERCLIP_INSTANCE_ID=default
+PAPERCLIP_DEPLOYMENT_MODE=authenticated
+PAPERCLIP_DEPLOYMENT_EXPOSURE=public
+PAPERCLIP_MIGRATION_AUTO_APPLY=true
+PAPERCLIP_MIGRATION_PROMPT=never
+
+# Auth. Generate or copy these securely.
+BETTER_AUTH_SECRET=<replace-with-openssl-rand-hex-32>
+PAPERCLIP_AGENT_JWT_SECRET=<copy-from-local-or-replace-with-openssl-rand-hex-32>
+
+# These URL values are overwritten dynamically by the quick-tunnel start script.
+# Keep localhost defaults here so first boot is still valid before cloudflared prints a URL.
+PAPERCLIP_PUBLIC_URL=http://localhost:3100
+PAPERCLIP_AUTH_BASE_URL_MODE=explicit
+PAPERCLIP_AUTH_PUBLIC_BASE_URL=http://localhost:3100
+BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:3100,http://127.0.0.1:3100
+PAPERCLIP_ALLOWED_HOSTNAMES=localhost,127.0.0.1
+
+# Match your current local sign-up behavior.
+PAPERCLIP_AUTH_DISABLE_SIGN_UP=true
+
+# AgentMail websocket intake. This avoids changing AgentMail webhooks every time
+# the trycloudflare URL changes.
+PAPERCLIP_AGENTMAIL_INBOUND_TRANSPORT=websocket
+PAPERCLIP_AGENTMAIL_INBOUND_MAILBOX=codex32@agentmail.to
+PAPERCLIP_AGENTMAIL_INBOUND_COMPANY_ID=1ec0b6dd-9e1d-4fd5-9b0d-37324447b928
+
+# AgentMail API settings.
+PAPERCLIP_AGENTMAIL_API_KEY=<copy-your-current-agentmail-api-key>
+PAPERCLIP_AGENTMAIL_API_BASE_URL=https://api.agentmail.to/v0
+PAPERCLIP_AGENTMAIL_SEND_PATH=/messages
+
+# Legacy only. Safe to keep if you later switch to webhook mode.
+PAPERCLIP_AGENTMAIL_WEBHOOK_SECRET=<copy-existing-or-generate-new>
+
+# NotebookLM ingestion.
+PAPERCLIP_NOTEBOOKLM_ENABLED=true
+PAPERCLIP_NOTEBOOKLM_ATTACHMENT_MAX_BYTES=10485760
+PAPERCLIP_NOTEBOOKLM_ALLOWED_MIME_TYPES=text/plain,text/markdown,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document
+
+# Optional local agent keys.
+OPENAI_API_KEY=<optional>
+ANTHROPIC_API_KEY=<optional>
+```
+
+Important: your current company id is:
+
+```text
+1ec0b6dd-9e1d-4fd5-9b0d-37324447b928
+```
+
+If you import/create a different company on the server, replace `PAPERCLIP_AGENTMAIL_INBOUND_COMPANY_ID` with the new server company id.
+
+Secure the env file:
+
+```bash
+sudo chown root:paperclip /etc/paperclip/paperclip.env
+sudo chmod 640 /etc/paperclip/paperclip.env
+```
+
+Generate new secrets if needed:
+
+```bash
+openssl rand -hex 32
+```
+
+## Server `config.json`
+
+For the systemd deployment, keep `config.json` static and let env vars handle the current quick-tunnel URL.
+
+If you need to create a server config manually, use:
+
+```json
+{
+  "$meta": {
+    "version": 1,
+    "source": "server-deploy"
+  },
+  "database": {
+    "mode": "embedded-postgres",
+    "embeddedPostgresDataDir": "/var/lib/paperclip/instances/default/db",
+    "embeddedPostgresPort": 54329,
+    "backup": {
+      "enabled": true,
+      "intervalMinutes": 60,
+      "retentionDays": 30,
+      "dir": "/var/lib/paperclip/instances/default/data/backups"
+    }
+  },
+  "logging": {
+    "mode": "file",
+    "logDir": "/var/lib/paperclip/instances/default/logs"
+  },
+  "server": {
+    "deploymentMode": "authenticated",
+    "exposure": "public",
+    "host": "0.0.0.0",
+    "port": 3100,
+    "allowedHostnames": ["localhost", "127.0.0.1"],
+    "serveUi": true
+  },
+  "telemetry": {
+    "enabled": true
+  },
+  "auth": {
+    "baseUrlMode": "explicit",
+    "publicBaseUrl": "http://localhost:3100",
+    "disableSignUp": true
+  },
+  "storage": {
+    "provider": "local_disk",
+    "localDisk": {
+      "baseDir": "/var/lib/paperclip/instances/default/data/storage"
+    }
+  },
+  "secrets": {
+    "provider": "local_encrypted",
+    "strictMode": false,
+    "localEncrypted": {
+      "keyFilePath": "/var/lib/paperclip/instances/default/secrets/master.key"
+    }
+  }
+}
+```
+
+Create it only if Paperclip has not already created one:
+
+```bash
+sudo -u paperclip mkdir -p /var/lib/paperclip/instances/default
+sudo -u paperclip nano /var/lib/paperclip/instances/default/config.json
+```
+
+Do not put the temporary `trycloudflare.com` URL permanently in `config.json`. The quick-tunnel start script should export the current URL at each boot.
+
+## Use `scripts/agentmail-webhook-url.ps1` With The Current Company ID
+
+The helper script reads the active Cloudflare quick-tunnel URL from the local cloudflared metrics endpoint:
+
+```text
+http://127.0.0.1:20241/metrics
+```
+
+It then updates env auth URL values:
+
+```dotenv
+PAPERCLIP_AUTH_BASE_URL_MODE=explicit
+PAPERCLIP_AUTH_PUBLIC_BASE_URL=<current-trycloudflare-url>
+BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:3100,http://127.0.0.1:3100,<current-trycloudflare-url>
+```
+
+With your current websocket AgentMail mode, it prints the AgentMail status URL and does not require an AgentMail webhook URL.
+
+### Windows Local Command
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\agentmail-webhook-url.ps1 `
+  -CompanyId "1ec0b6dd-9e1d-4fd5-9b0d-37324447b928" `
+  -UpdateEnv `
+  -EnvFile "$HOME\.paperclip\instances\default\.env"
+```
+
+### Linux Server Command With PowerShell Core
+
+Install PowerShell Core if you want to reuse the same script on the Linux server:
+
+```bash
+sudo apt update
+sudo apt install -y wget apt-transport-https software-properties-common
+wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt update
+sudo apt install -y powershell
+```
+
+Then run:
+
+```bash
+cd /opt/paperclip/app
+pwsh -ExecutionPolicy Bypass -File ./scripts/agentmail-webhook-url.ps1 \
+  -CompanyId "1ec0b6dd-9e1d-4fd5-9b0d-37324447b928" \
+  -UpdateEnv \
+  -EnvFile "/var/lib/paperclip/instances/default/.env"
+```
+
+The script updates the instance `.env`. If you are running through systemd with `/etc/paperclip/paperclip.env`, the start wrapper still needs to export the active URL before launching Paperclip.
+
+## Update The Quick-Tunnel Start Script To Also Write Instance `.env`
+
+In `/opt/paperclip/run-with-quick-tunnel.sh`, after this line:
+
+```bash
+echo "$URL" > "$URL_FILE"
+```
+
+add:
+
+```bash
+INSTANCE_ENV="/var/lib/paperclip/instances/default/.env"
+mkdir -p "$(dirname "$INSTANCE_ENV")"
+touch "$INSTANCE_ENV"
+
+set_env_line() {
+  key="$1"
+  value="$2"
+  if grep -q "^${key}=" "$INSTANCE_ENV"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$INSTANCE_ENV"
+  else
+    printf "%s=%s\n" "$key" "$value" >> "$INSTANCE_ENV"
+  fi
+}
+
+set_env_line "PAPERCLIP_AUTH_BASE_URL_MODE" "explicit"
+set_env_line "PAPERCLIP_AUTH_PUBLIC_BASE_URL" "$URL"
+set_env_line "PAPERCLIP_PUBLIC_URL" "$URL"
+set_env_line "BETTER_AUTH_TRUSTED_ORIGINS" "http://localhost:3100,http://127.0.0.1:3100,$URL"
+set_env_line "PAPERCLIP_ALLOWED_HOSTNAMES" "localhost,127.0.0.1,${URL#https://}"
+```
+
+The same script should still export these values before starting Paperclip:
+
+```bash
+export PAPERCLIP_PUBLIC_URL="$URL"
+export PAPERCLIP_AUTH_BASE_URL_MODE=explicit
+export PAPERCLIP_AUTH_PUBLIC_BASE_URL="$URL"
+export BETTER_AUTH_TRUSTED_ORIGINS="http://localhost:3100,http://127.0.0.1:3100,$URL"
+export PAPERCLIP_ALLOWED_HOSTNAMES="localhost,127.0.0.1,${URL#https://}"
+```
+
+This gives you both:
+
+- current runtime env for the running server
+- persisted instance `.env` showing the latest quick-tunnel URL
+
+## Verify Server Env After Start
+
+```bash
+sudo systemctl restart paperclip
+sudo journalctl -u paperclip -f
+```
+
+Current URL:
+
+```bash
+sudo cat /var/lib/paperclip/current-trycloudflare-url.txt
+```
+
+AgentMail listener:
+
+```bash
+curl http://127.0.0.1:3100/api/companies/1ec0b6dd-9e1d-4fd5-9b0d-37324447b928/agentmail/status
+```
+
+NotebookLM:
+
+```bash
+sudo -u paperclip -H bash -lc '
+export PATH="$HOME/.local/bin:$PATH"
+nlm login --check
+'
+```
+
+If the company id changes on the server, update every command and env value that contains:
+
+```text
+1ec0b6dd-9e1d-4fd5-9b0d-37324447b928
+```
+
+## Quick Command: Run `scripts/agentmail-webhook-url.ps1`
+
+Use this helper after `cloudflared tunnel --url http://localhost:3100` is running.
+
+The helper reads the current `trycloudflare.com` URL from:
+
+```text
+http://127.0.0.1:20241/metrics
+```
+
+Then it updates Paperclip auth URL env values for the current tunnel.
+
+Because your current AgentMail inbound mode is `websocket`, the helper does not create or register an AgentMail webhook. It prints the Paperclip public URL and the AgentMail listener status URL instead.
+
+### Windows
+
+Terminal 1:
+
+```powershell
+cloudflared tunnel --url http://localhost:3100
+```
+
+Keep Terminal 1 open.
+
+Terminal 2, from the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\agentmail-webhook-url.ps1 `
+  -CompanyId "1ec0b6dd-9e1d-4fd5-9b0d-37324447b928" `
+  -UpdateEnv
+```
+
+By default, this updates:
+
+```text
+C:\Users\<you>\.paperclip\instances\default\.env
+```
+
+To specify the env file explicitly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\agentmail-webhook-url.ps1 `
+  -CompanyId "1ec0b6dd-9e1d-4fd5-9b0d-37324447b928" `
+  -UpdateEnv `
+  -EnvFile "$HOME\.paperclip\instances\default\.env"
+```
+
+Then restart Paperclip:
+
+```powershell
+pnpm dev
+```
+
+### Linux
+
+Install PowerShell Core once:
+
+```bash
+sudo apt update
+sudo apt install -y wget apt-transport-https software-properties-common
+wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt update
+sudo apt install -y powershell
+```
+
+Terminal 1:
+
+```bash
+cloudflared tunnel --url http://localhost:3100
+```
+
+Keep Terminal 1 open.
+
+Terminal 2, from the repo root:
+
+```bash
+pwsh -ExecutionPolicy Bypass -File ./scripts/agentmail-webhook-url.ps1 \
+  -CompanyId "1ec0b6dd-9e1d-4fd5-9b0d-37324447b928" \
+  -UpdateEnv \
+  -EnvFile "$HOME/.paperclip/instances/default/.env"
+```
+
+For the systemd server deployment from this guide:
+
+```bash
+cd /opt/paperclip/app
+pwsh -ExecutionPolicy Bypass -File ./scripts/agentmail-webhook-url.ps1 \
+  -CompanyId "1ec0b6dd-9e1d-4fd5-9b0d-37324447b928" \
+  -UpdateEnv \
+  -EnvFile "/var/lib/paperclip/instances/default/.env"
+```
+
+Then restart Paperclip:
+
+```bash
+sudo systemctl restart paperclip
+```
+
+Check AgentMail listener status:
+
+```bash
+curl http://127.0.0.1:3100/api/companies/1ec0b6dd-9e1d-4fd5-9b0d-37324447b928/agentmail/status
+```

@@ -155,6 +155,7 @@ export async function prepareManagedCodexHome(
   env: NodeJS.ProcessEnv,
   onLog: AdapterExecutionContext["onLog"],
   companyId?: string,
+  agentRole?: string | null,
 ): Promise<string> {
   const targetHome = resolveManagedCodexHomeDir(env, companyId);
 
@@ -169,9 +170,12 @@ export async function prepareManagedCodexHome(
     await ensureSynchronizedFile(path.join(targetHome, name), source);
   }
 
+  const roleSuffix = typeof agentRole === "string" && agentRole.trim().length > 0
+    ? ` for role "${agentRole.trim()}"`
+    : "";
   await onLog(
     "stdout",
-    `[paperclip] Using ${isWorktreeMode(env) ? "worktree-isolated" : "Paperclip-managed"} Codex home "${targetHome}" (synced from "${sourceHome}").\n`,
+    `[paperclip] Using ${isWorktreeMode(env) ? "worktree-isolated" : "Paperclip-managed"} Codex home "${targetHome}" (synced from "${sourceHome}")${roleSuffix}.\n`,
   );
   return targetHome;
 }

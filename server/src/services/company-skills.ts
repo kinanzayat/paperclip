@@ -1594,6 +1594,7 @@ export function companySkillService(db: Db) {
               config: {
                 ...runtimeConfig,
                 paperclipRuntimeSkills: runtimeSkillEntries,
+                paperclipAgentRole: agent.role,
               },
             });
             actualState = snapshot.entries.find((entry) => entry.key === key)?.state

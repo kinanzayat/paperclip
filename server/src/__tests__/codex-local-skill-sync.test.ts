@@ -13,6 +13,9 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 describe("codex local skill sync", () => {
   const paperclipKey = "paperclipai/paperclip/paperclip";
+  const paraMemoryKey = "paperclipai/paperclip/para-memory-files";
+  const createAgentKey = "paperclipai/paperclip/paperclip-create-agent";
+  const createPluginKey = "paperclipai/paperclip/paperclip-create-plugin";
   const cleanupDirs = new Set<string>();
 
   afterEach(async () => {
@@ -118,5 +121,44 @@ describe("codex local skill sync", () => {
     expect(snapshot.desiredSkills).not.toContain("paperclip");
     expect(snapshot.entries.find((entry) => entry.key === paperclipKey)?.state).toBe("configured");
     expect(snapshot.entries.find((entry) => entry.key === "paperclip")).toBeUndefined();
+  });
+
+  it("limits bundled Codex skills by agent role when role context is provided", async () => {
+    const codexHome = await makeTempDir("paperclip-codex-role-skill-sync-");
+    cleanupDirs.add(codexHome);
+
+    const engineerSnapshot = await listCodexSkills({
+      agentId: "agent-4",
+      companyId: "company-1",
+      adapterType: "codex_local",
+      config: {
+        env: {
+          CODEX_HOME: codexHome,
+        },
+        paperclipAgentRole: "engineer",
+      },
+    });
+
+    expect(engineerSnapshot.desiredSkills).toContain(paperclipKey);
+    expect(engineerSnapshot.desiredSkills).not.toContain(paraMemoryKey);
+    expect(engineerSnapshot.desiredSkills).not.toContain(createAgentKey);
+    expect(engineerSnapshot.desiredSkills).not.toContain(createPluginKey);
+
+    const ceoSnapshot = await listCodexSkills({
+      agentId: "agent-5",
+      companyId: "company-1",
+      adapterType: "codex_local",
+      config: {
+        env: {
+          CODEX_HOME: codexHome,
+        },
+        paperclipAgentRole: "ceo",
+      },
+    });
+
+    expect(ceoSnapshot.desiredSkills).toContain(paperclipKey);
+    expect(ceoSnapshot.desiredSkills).toContain(paraMemoryKey);
+    expect(ceoSnapshot.desiredSkills).toContain(createAgentKey);
+    expect(ceoSnapshot.desiredSkills).not.toContain(createPluginKey);
   });
 });

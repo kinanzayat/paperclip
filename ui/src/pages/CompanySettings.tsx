@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DEFAULT_FEEDBACK_DATA_SHARING_TERMS_VERSION,
   ISSUE_STATUS_CATEGORIES,
+  type CompanyApprovalRole,
   type CompanyMembership,
   type CompanyMembershipRole,
   type CompanyIssueStatus,
@@ -61,6 +62,10 @@ const DEFAULT_STATUS_COLORS: Record<IssueStatusCategory, string> = {
 const MEMBERSHIP_ROLE_OPTIONS: Array<{ value: CompanyMembershipRole; label: string }> = [
   { value: "member", label: "Member" },
   { value: "admin", label: "Admin" },
+];
+
+const APPROVAL_ROLE_OPTIONS: Array<{ value: CompanyApprovalRole | "none"; label: string }> = [
+  { value: "none", label: "None" },
   { value: "product_owner_head", label: "Product Owner Head" },
   { value: "tech_team", label: "Tech Team" },
 ];
@@ -301,6 +306,27 @@ export function CompanySettings() {
     onError: (err) => {
       pushToast({
         title: "Failed to update role",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+    },
+  });
+
+  const updateMemberApprovalRoleMutation = useMutation({
+    mutationFn: ({
+      memberId,
+      approvalRole,
+    }: {
+      memberId: string;
+      approvalRole: CompanyApprovalRole | null;
+    }) => accessApi.updateMemberApprovalRole(selectedCompanyId!, memberId, approvalRole),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.members(selectedCompanyId!) });
+      pushToast({ title: "Member approval role updated", tone: "success" });
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Failed to update approval role",
         body: err instanceof Error ? err.message : "Unknown error",
         tone: "error",
       });
@@ -1008,27 +1034,51 @@ export function CompanySettings() {
               >
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">{memberName(member)}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {member.user?.email ?? member.principalId} · {member.status}
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    <div className="break-all">{member.user?.email ?? member.principalId}</div>
+                    <div>• {member.status}</div>
                   </div>
                 </div>
-                <Select
-                  value={member.membershipRole ?? "member"}
-                  onValueChange={(role) => updateMemberRoleMutation.mutate({
-                    memberId: member.id,
-                    membershipRole: role as CompanyMembershipRole,
-                  })}
-                  disabled={updateMemberRoleMutation.isPending}
-                >
-                  <SelectTrigger className="w-[220px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MEMBERSHIP_ROLE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="space-y-1">
+                  <div className="text-[11px] text-muted-foreground">Base role</div>
+                  <Select
+                    value={member.membershipRole ?? "member"}
+                    onValueChange={(role) => updateMemberRoleMutation.mutate({
+                      memberId: member.id,
+                      membershipRole: role as CompanyMembershipRole,
+                    })}
+                    disabled={updateMemberRoleMutation.isPending}
+                  >
+                    <SelectTrigger className="w-[220px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MEMBERSHIP_ROLE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[11px] text-muted-foreground">Approval role</div>
+                  <Select
+                    value={member.approvalRole ?? "none"}
+                    onValueChange={(role) => updateMemberApprovalRoleMutation.mutate({
+                      memberId: member.id,
+                      approvalRole: role === "none" ? null : (role as CompanyApprovalRole),
+                    })}
+                    disabled={updateMemberApprovalRoleMutation.isPending}
+                  >
+                    <SelectTrigger className="w-[220px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {APPROVAL_ROLE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             ))
           )}

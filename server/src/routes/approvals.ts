@@ -64,6 +64,18 @@ export function approvalRoutes(db: Db) {
     return [];
   }
 
+  function resolveMemberApprovalRole(
+    membership: { approvalRole?: string | null; membershipRole?: string | null } | null | undefined,
+  ): string | null {
+    if (membership?.approvalRole === "product_owner_head" || membership?.approvalRole === "tech_team") {
+      return membership.approvalRole;
+    }
+    if (membership?.membershipRole === "product_owner_head" || membership?.membershipRole === "tech_team") {
+      return membership.membershipRole;
+    }
+    return null;
+  }
+
   async function sendRoleStageNotifications(input: {
     companyId: string;
     approvalId: string;
@@ -218,12 +230,12 @@ export function approvalRoutes(db: Db) {
           return;
         }
         const membership = await access.getMembership(existingApproval.companyId, "user", userId);
-        const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
-        if (!membershipRole || !requiredRoles.includes(membershipRole)) {
+        const approvalRole = resolveMemberApprovalRole(membership);
+        if (!approvalRole || !requiredRoles.includes(approvalRole)) {
           res.status(403).json({ error: `Only ${requiredRoles.join(", ")} members can approve this approval` });
           return;
         }
-        approvedByRoleType = membershipRole;
+        approvedByRoleType = approvalRole;
       }
     }
 
@@ -402,8 +414,8 @@ export function approvalRoutes(db: Db) {
         return;
       }
       const membership = await access.getMembership(existingApproval.companyId, "user", userId);
-      const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
-      if (!membershipRole || !requiredRoles.includes(membershipRole)) {
+      const approvalRole = resolveMemberApprovalRole(membership);
+      if (!approvalRole || !requiredRoles.includes(approvalRole)) {
         res.status(403).json({ error: `Only ${requiredRoles.join(", ")} members can reject this approval` });
         return;
       }
@@ -460,8 +472,8 @@ export function approvalRoutes(db: Db) {
           return;
         }
         const membership = await access.getMembership(existingApproval.companyId, "user", userId);
-        const membershipRole = typeof membership?.membershipRole === "string" ? membership.membershipRole : null;
-        if (!membershipRole || !requiredRoles.includes(membershipRole)) {
+        const approvalRole = resolveMemberApprovalRole(membership);
+        if (!approvalRole || !requiredRoles.includes(approvalRole)) {
           res.status(403).json({ error: `Only ${requiredRoles.join(", ")} members can request revision` });
           return;
         }

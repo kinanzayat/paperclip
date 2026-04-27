@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { CompanyMembership } from "@paperclipai/shared";
 import {
+  activeUserMembers,
   assigneeValueFromSelection,
   currentUserAssigneeOption,
   formatAssigneeUserLabel,
+  memberAssigneeOptions,
+  memberDisplayName,
   parseAssigneeValue,
   suggestedCommentAssigneeValue,
 } from "./assignees";
@@ -50,6 +54,75 @@ describe("assignee selection helpers", () => {
     expect(formatAssigneeUserLabel("user-1", "user-1")).toBe("Me");
     expect(formatAssigneeUserLabel("local-board", "someone-else")).toBe("Board");
     expect(formatAssigneeUserLabel("user-abcdef", "someone-else")).toBe("user-");
+  });
+
+  it("filters to active user memberships and formats member labels", () => {
+    const members: CompanyMembership[] = [
+      {
+        id: "m-1",
+        companyId: "c-1",
+        principalType: "user",
+        principalId: "local-board",
+        status: "active",
+        membershipRole: "admin",
+        user: { id: "local-board", name: null, email: null, image: null },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: "m-2",
+        companyId: "c-1",
+        principalType: "agent",
+        principalId: "agent-1",
+        status: "active",
+        membershipRole: "member",
+        user: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: "m-3",
+        companyId: "c-1",
+        principalType: "user",
+        principalId: "user-2",
+        status: "suspended",
+        membershipRole: "member",
+        user: { id: "user-2", name: "User Two", email: "two@example.com", image: null },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ];
+
+    expect(activeUserMembers(members)).toHaveLength(1);
+    expect(memberDisplayName(members[0]!, "user-x")).toBe("Board");
+  });
+
+  it("builds member assignee options including Me alias and search text", () => {
+    const now = new Date();
+    const options = memberAssigneeOptions(
+      [
+        {
+          id: "m-1",
+          companyId: "c-1",
+          principalType: "user",
+          principalId: "user-1",
+          status: "active",
+          membershipRole: "admin",
+          user: { id: "user-1", name: "User One", email: "one@example.com", image: null },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ] as CompanyMembership[],
+      "user-1",
+    );
+
+    expect(options).toEqual([
+      {
+        id: "user:user-1",
+        label: "Me",
+        searchText: "User One one@example.com user-1 me you self",
+      },
+    ]);
   });
 
   it("suggests the last non-me commenter without changing the actual assignee encoding", () => {

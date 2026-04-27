@@ -21,6 +21,8 @@ import {
   approvals,
   activityLog,
   companySecrets,
+  agentmailNotebookIssueLinks,
+  agentmailNotebooks,
   agentmailWebhookDeliveries,
   agentmailOutboundNotifications,
   joinRequests,
@@ -274,6 +276,8 @@ export function companyService(db: Db) {
         await tx.delete(approvalComments).where(eq(approvalComments.companyId, id));
         await tx.delete(approvals).where(eq(approvals.companyId, id));
         await tx.delete(companySecrets).where(eq(companySecrets.companyId, id));
+        await tx.delete(agentmailNotebookIssueLinks).where(eq(agentmailNotebookIssueLinks.companyId, id));
+        await tx.delete(agentmailNotebooks).where(eq(agentmailNotebooks.companyId, id));
         await tx.delete(agentmailWebhookDeliveries).where(eq(agentmailWebhookDeliveries.companyId, id));
         await tx.delete(agentmailOutboundNotifications).where(eq(agentmailOutboundNotifications.companyId, id));
         await tx.delete(joinRequests).where(eq(joinRequests.companyId, id));

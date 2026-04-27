@@ -12,12 +12,90 @@ import {
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
+const PAPERCLIP_SKILL_NAMESPACE = "paperclipai/paperclip/";
+const PAPERCLIP_CORE_SKILL_KEY = "paperclipai/paperclip/paperclip";
+const PAPERCLIP_CREATE_AGENT_SKILL_KEY = "paperclipai/paperclip/paperclip-create-agent";
+const PAPERCLIP_CREATE_PLUGIN_SKILL_KEY = "paperclipai/paperclip/paperclip-create-plugin";
+const PAPERCLIP_PARA_MEMORY_SKILL_KEY = "paperclipai/paperclip/para-memory-files";
+
+const ROLE_SKILL_POLICY = {
+  default: [PAPERCLIP_CORE_SKILL_KEY],
+  ceo: [PAPERCLIP_CORE_SKILL_KEY, PAPERCLIP_PARA_MEMORY_SKILL_KEY, PAPERCLIP_CREATE_AGENT_SKILL_KEY],
+  manager: [PAPERCLIP_CORE_SKILL_KEY, PAPERCLIP_PARA_MEMORY_SKILL_KEY, PAPERCLIP_CREATE_AGENT_SKILL_KEY],
+  cto: [PAPERCLIP_CORE_SKILL_KEY, PAPERCLIP_CREATE_PLUGIN_SKILL_KEY],
+} as const;
+
+function isPaperclipBundledSkillKey(key: string): boolean {
+  return key.startsWith(PAPERCLIP_SKILL_NAMESPACE);
+}
+
+export function normalizeCodexAgentRole(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveRolePolicySkillSet(agentRole: string | null): Set<string> | null {
+  if (!agentRole) return null;
+  if (agentRole === "ceo") {
+    return new Set(ROLE_SKILL_POLICY.ceo);
+  }
+  if (agentRole === "cto") {
+    return new Set(ROLE_SKILL_POLICY.cto);
+  }
+  if (agentRole === "pm" || agentRole === "product_analyzer" || agentRole === "manager") {
+    return new Set(ROLE_SKILL_POLICY.manager);
+  }
+  if (
+    agentRole === "engineer" ||
+    agentRole === "designer" ||
+    agentRole === "qa" ||
+    agentRole === "devops" ||
+    agentRole === "researcher" ||
+    agentRole === "general" ||
+    agentRole === "cmo" ||
+    agentRole === "cfo"
+  ) {
+    return new Set(ROLE_SKILL_POLICY.default);
+  }
+  // Unknown roles keep full availability to avoid accidental regressions.
+  return null;
+}
+
+function applyRoleBasedSkillFiltering<T extends { key: string }>(
+  entries: T[],
+  agentRole: string | null,
+): T[] {
+  const allowedSkillKeys = resolveRolePolicySkillSet(agentRole);
+  if (!allowedSkillKeys) return entries;
+  return entries.filter((entry) =>
+    !isPaperclipBundledSkillKey(entry.key) || allowedSkillKeys.has(entry.key),
+  );
+}
+
+function filterDesiredSkillsForRolePolicy(
+  desiredSkills: string[],
+  agentRole: string | null,
+): string[] {
+  const allowedSkillKeys = resolveRolePolicySkillSet(agentRole);
+  if (!allowedSkillKeys) return desiredSkills;
+  return desiredSkills.filter((key) =>
+    !isPaperclipBundledSkillKey(key) || allowedSkillKeys.has(key),
+  );
+}
+
 async function buildCodexSkillSnapshot(
   config: Record<string, unknown>,
 ): Promise<AdapterSkillSnapshot> {
-  const availableEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
+  const agentRole = normalizeCodexAgentRole(config.paperclipAgentRole);
+  const availableEntries = applyRoleBasedSkillFiltering(
+    await readPaperclipRuntimeSkillEntries(config, __moduleDir),
+    agentRole,
+  );
   const availableByKey = new Map(availableEntries.map((entry) => [entry.key, entry]));
-  const desiredSkills = resolvePaperclipDesiredSkillNames(config, availableEntries);
+  const desiredSkills = resolveCodexDesiredSkillNames(config, availableEntries, {
+    agentRole,
+  });
   const desiredSet = new Set(desiredSkills);
   const entries: AdapterSkillEntry[] = availableEntries.map((entry) => ({
     key: entry.key,
@@ -82,6 +160,10 @@ export async function syncCodexSkills(
 export function resolveCodexDesiredSkillNames(
   config: Record<string, unknown>,
   availableEntries: Array<{ key: string; required?: boolean }>,
+  options: { agentRole?: string | null } = {},
 ) {
-  return resolvePaperclipDesiredSkillNames(config, availableEntries);
+  const agentRole = normalizeCodexAgentRole(options.agentRole ?? config.paperclipAgentRole);
+  const filteredEntries = applyRoleBasedSkillFiltering(availableEntries, agentRole);
+  const desiredSkills = resolvePaperclipDesiredSkillNames(config, filteredEntries);
+  return filterDesiredSkillsForRolePolicy(desiredSkills, agentRole);
 }

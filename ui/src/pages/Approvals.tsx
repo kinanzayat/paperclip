@@ -78,17 +78,25 @@ export function Approvals() {
   });
 
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
-  const currentMembershipRole = (members ?? [])
-    .find((member) => member.principalType === "user" && member.principalId === currentUserId && member.status === "active")
-    ?.membershipRole ?? null;
+  const currentApprovalRole = (() => {
+    const membership = (members ?? [])
+      .find((member) => member.principalType === "user" && member.principalId === currentUserId && member.status === "active");
+    if (!membership) return null;
+    const legacyRole = (membership as { membershipRole?: string | null }).membershipRole;
+    return membership.approvalRole ?? (
+      legacyRole === "product_owner_head" || legacyRole === "tech_team"
+        ? legacyRole
+        : null
+    );
+  })();
   const isInstanceAdmin = session?.user?.isInstanceAdmin === true;
 
   const canResolveApproval = (approval: { requiredRoles: string[] | null }) => {
     const roles = normalizeRequiredRoles(approval.requiredRoles);
     if (roles.length === 0) return true;
     if (isInstanceAdmin) return true;
-    if (!currentMembershipRole) return false;
-    return roles.includes(currentMembershipRole);
+    if (!currentApprovalRole) return false;
+    return roles.includes(currentApprovalRole);
   };
 
   const approveMutation = useMutation({
@@ -153,9 +161,9 @@ export function Approvals() {
 
       {error && <p className="text-sm text-destructive">{error.message}</p>}
       {actionError && <p className="text-sm text-destructive">{actionError}</p>}
-      {statusFilter === "pending" && currentMembershipRole && (
+      {statusFilter === "pending" && currentApprovalRole && (
         <p className="text-xs text-muted-foreground">
-          Showing approvals for your role: {roleLabel(currentMembershipRole)}
+          Showing approvals for your role: {roleLabel(currentApprovalRole)}
         </p>
       )}
 

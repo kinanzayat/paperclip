@@ -8,6 +8,7 @@ import {
 } from "@paperclipai/db";
 import {
   PERMISSION_KEYS,
+  type CompanyApprovalRole,
   type CompanyMembershipRole,
   type PermissionKey,
   type PrincipalType,
@@ -27,21 +28,33 @@ function normalizeMembershipRole(
   membershipRole: string | null | undefined,
 ): CompanyMembershipRole | null {
   if (membershipRole === "owner") return "admin";
-  if (
-    membershipRole === "admin"
-    || membershipRole === "member"
-    || membershipRole === "product_owner_head"
-    || membershipRole === "tech_team"
-  ) {
+  if (membershipRole === "product_owner_head" || membershipRole === "tech_team") return "admin";
+  if (membershipRole === "admin" || membershipRole === "member") {
     return membershipRole;
   }
   return null;
+}
+
+function normalizeApprovalRole(
+  approvalRole: string | null | undefined,
+): CompanyApprovalRole | null {
+  if (approvalRole === "product_owner_head" || approvalRole === "tech_team") {
+    return approvalRole;
+  }
+  return null;
+}
+
+function normalizeApprovalRoleFromMembership(
+  row: Pick<MembershipRow, "membershipRole" | "approvalRole">,
+): CompanyApprovalRole | null {
+  return normalizeApprovalRole(row.approvalRole) ?? normalizeApprovalRole(row.membershipRole);
 }
 
 function normalizeMembershipRow(row: MembershipRow): MembershipRow {
   return {
     ...row,
     membershipRole: normalizeMembershipRole(row.membershipRole),
+    approvalRole: normalizeApprovalRoleFromMembership(row),
   };
 }
 
@@ -340,6 +353,7 @@ export function accessService(db: Db) {
           principalId: userId,
           status: "active",
           membershipRole: "member",
+          approvalRole: null,
         });
       }
     });
@@ -353,10 +367,15 @@ export function accessService(db: Db) {
     principalId: string,
     membershipRole: string | null = "member",
     status: "pending" | "active" | "suspended" = "active",
+    approvalRole: string | null | undefined = undefined,
   ) {
     const normalizedMembershipRole = normalizeMembershipRole(membershipRole);
+    const normalizedApprovalRole = approvalRole === undefined ? null : normalizeApprovalRole(approvalRole);
     const existing = await getMembership(companyId, principalType, principalId);
     if (existing) {
+      const nextApprovalRole = approvalRole === undefined
+        ? normalizeApprovalRoleFromMembership(existing)
+        : normalizedApprovalRole;
       if (principalType === "user") {
         await assertCompanyKeepsAnAdmin(
           db,
@@ -367,11 +386,24 @@ export function accessService(db: Db) {
         );
       }
       const existingMembershipRole = normalizeMembershipRole(existing.membershipRole);
+      const existingApprovalRole = normalizeApprovalRoleFromMembership(existing);
       const requiresRoleNormalization = existing.membershipRole !== normalizedMembershipRole;
-      if (existing.status !== status || existingMembershipRole !== normalizedMembershipRole || requiresRoleNormalization) {
+      const requiresApprovalRoleNormalization = existing.approvalRole !== nextApprovalRole;
+      if (
+        existing.status !== status
+        || existingMembershipRole !== normalizedMembershipRole
+        || existingApprovalRole !== nextApprovalRole
+        || requiresRoleNormalization
+        || requiresApprovalRoleNormalization
+      ) {
         const updated = await db
           .update(companyMemberships)
-          .set({ status, membershipRole: normalizedMembershipRole, updatedAt: new Date() })
+          .set({
+            status,
+            membershipRole: normalizedMembershipRole,
+            approvalRole: nextApprovalRole,
+            updatedAt: new Date(),
+          })
           .where(eq(companyMemberships.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? null);
@@ -388,6 +420,7 @@ export function accessService(db: Db) {
         principalId,
         status,
         membershipRole: normalizedMembershipRole,
+        approvalRole: normalizedApprovalRole,
       })
       .returning()
       .then((rows) => normalizeMembershipRow(rows[0]));
@@ -411,6 +444,35 @@ export function accessService(db: Db) {
       .update(companyMemberships)
       .set({
         membershipRole,
+        updatedAt: new Date(),
+      })
+      .where(eq(companyMemberships.id, member.id))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+
+    return updated ? normalizeMembershipRow(updated) : normalizeMembershipRow(member);
+  }
+
+  async function updateMemberApprovalRole(
+    companyId: string,
+    memberId: string,
+    approvalRole: CompanyApprovalRole | null,
+  ) {
+    const member = await db
+      .select()
+      .from(companyMemberships)
+      .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.id, memberId)))
+      .then((rows) => rows[0] ?? null);
+    if (!member) return null;
+    if (member.principalType !== "user") {
+      throw conflict("Only user members can have approval roles");
+    }
+
+    const normalized = normalizeApprovalRole(approvalRole);
+    const updated = await db
+      .update(companyMemberships)
+      .set({
+        approvalRole: normalized,
         updatedAt: new Date(),
       })
       .where(eq(companyMemberships.id, member.id))
@@ -462,6 +524,7 @@ export function accessService(db: Db) {
         membership.principalId,
         normalizeMembershipRole(membership.membershipRole),
         "active",
+        normalizeApprovalRoleFromMembership(membership),
       );
     }
     return sourceMemberships;
@@ -508,7 +571,7 @@ export function accessService(db: Db) {
       return;
     }
 
-    await ensureMembership(companyId, principalType, principalId, "member", "active");
+    await ensureMembership(companyId, principalType, principalId, "member", "active", undefined);
 
     const existing = await db
       .select()
@@ -555,6 +618,7 @@ export function accessService(db: Db) {
     getMembership,
     ensureMembership,
     updateMemberRole,
+    updateMemberApprovalRole,
     listMembers,
     listActiveUserMemberships,
     copyActiveUserMemberships,

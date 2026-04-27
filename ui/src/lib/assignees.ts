@@ -1,3 +1,5 @@
+import type { CompanyMembership } from "@paperclipai/shared";
+
 export interface AssigneeSelection {
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
@@ -79,4 +81,42 @@ export function formatAssigneeUserLabel(
   if (currentUserId && userId === currentUserId) return "Me";
   if (userId === "local-board") return "Board";
   return userId.slice(0, 5);
+}
+
+export function activeUserMembers(members: CompanyMembership[] | undefined): CompanyMembership[] {
+  return (members ?? []).filter(
+    (member) => member.status === "active" && member.principalType === "user",
+  );
+}
+
+export function memberDisplayName(member: CompanyMembership, currentUserId: string | null): string {
+  return member.user?.name?.trim()
+    || member.user?.email?.trim()
+    || (member.principalId === "local-board" ? "Board" : null)
+    || (currentUserId && member.principalId === currentUserId ? "You" : null)
+    || member.principalId.slice(0, 8);
+}
+
+export function memberAssigneeSearchText(member: CompanyMembership, currentUserId: string | null): string {
+  return [
+    memberDisplayName(member, currentUserId),
+    member.user?.email ?? "",
+    member.principalId,
+    currentUserId && member.principalId === currentUserId ? "me you self" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function memberAssigneeOptions(
+  members: CompanyMembership[] | undefined,
+  currentUserId: string | null,
+): AssigneeOption[] {
+  return activeUserMembers(members).map((member) => ({
+    id: assigneeValueFromSelection({ assigneeUserId: member.principalId }),
+    label: currentUserId && member.principalId === currentUserId
+      ? "Me"
+      : memberDisplayName(member, currentUserId),
+    searchText: memberAssigneeSearchText(member, currentUserId),
+  }));
 }

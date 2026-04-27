@@ -4,8 +4,10 @@ import { agentmailWebhookBodySchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { companyService } from "../services/companies.js";
 import { agentmailService } from "../services/agentmail.js";
+import { agentmailNotebookService } from "../services/agentmail-notebooklm.js";
 import { queueInitialAgentmailAnalysis } from "../services/agentmail-intake.js";
 import { agentmailInboundListener, isAgentmailInboundWebsocketModeEnabled } from "../services/agentmail-inbound.js";
+import { assertBoard, assertCompanyAccess } from "./authz.js";
 
 function readWebhookMessageId(payload: unknown): string | null {
   const root = typeof payload === "object" && payload !== null ? payload as Record<string, unknown> : null;
@@ -21,6 +23,7 @@ export function agentmailRoutes(db: Db) {
   const router = Router();
   const companies = companyService(db);
   const svc = agentmailService(db);
+  const notebooks = agentmailNotebookService(db);
 
   router.get("/companies/:companyId/agentmail/status", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -31,6 +34,34 @@ export function agentmailRoutes(db: Db) {
     }
 
     res.status(200).json(agentmailInboundListener.getStatus(companyId));
+  });
+
+  router.get("/companies/:companyId/agentmail/notebooks/:messageId/status", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const company = await companies.getById(companyId);
+    if (!company) {
+      res.status(404).json({ error: "Company not found" });
+      return;
+    }
+    assertCompanyAccess(req, companyId);
+    res.status(200).json(await notebooks.statusForMessage(companyId, req.params.messageId as string));
+  });
+
+  router.post("/companies/:companyId/agentmail/notebooks/:messageId/resync", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const company = await companies.getById(companyId);
+    if (!company) {
+      res.status(404).json({ error: "Company not found" });
+      return;
+    }
+    assertBoard(req);
+    assertCompanyAccess(req, companyId);
+    const result = await notebooks.resyncMessageNotebook(companyId, req.params.messageId as string);
+    if (!result.ok) {
+      res.status(404).json(result);
+      return;
+    }
+    res.status(202).json(result);
   });
 
   router.post(

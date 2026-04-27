@@ -694,6 +694,7 @@ export function agentRoutes(db: Db) {
   async function buildRuntimeSkillConfig(
     companyId: string,
     adapterType: string,
+    agentRole: string,
     config: Record<string, unknown>,
   ) {
     const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(companyId, {
@@ -702,6 +703,7 @@ export function agentRoutes(db: Db) {
     return {
       ...config,
       paperclipRuntimeSkills: runtimeSkillEntries,
+      paperclipAgentRole: agentRole,
     };
   }
 
@@ -897,6 +899,7 @@ export function agentRoutes(db: Db) {
     const runtimeSkillConfig = await buildRuntimeSkillConfig(
       agent.companyId,
       agent.adapterType,
+      agent.role,
       runtimeConfig,
     );
     const snapshot = await adapter.listSkills({
@@ -963,6 +966,7 @@ export function agentRoutes(db: Db) {
       const runtimeSkillConfig = {
         ...runtimeConfig,
         paperclipRuntimeSkills: runtimeSkillEntries,
+        paperclipAgentRole: updated.role,
       };
       const snapshot = adapter?.syncSkills
         ? await adapter.syncSkills({

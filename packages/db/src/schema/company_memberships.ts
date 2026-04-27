@@ -10,6 +10,7 @@ export const companyMemberships = pgTable(
     principalId: text("principal_id").notNull(),
     status: text("status").notNull().default("active"),
     membershipRole: text("membership_role"),
+    approvalRole: text("approval_role"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

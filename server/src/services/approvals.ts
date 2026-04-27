@@ -323,7 +323,7 @@ export function approvalService(db: Db) {
         .where(
           and(
             eq(companyMemberships.companyId, companyId),
-            eq(companyMemberships.membershipRole, roleType),
+            eq(companyMemberships.approvalRole, roleType),
             eq(companyMemberships.status, "active"),
           ),
         );
@@ -338,7 +338,7 @@ export function approvalService(db: Db) {
           and(
             eq(companyMemberships.companyId, companyId),
             eq(companyMemberships.principalType, "user"),
-            eq(companyMemberships.membershipRole, roleType),
+            eq(companyMemberships.approvalRole, roleType),
             eq(companyMemberships.status, "active"),
           ),
         );

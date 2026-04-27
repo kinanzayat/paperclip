@@ -29,7 +29,7 @@ import {
   classifyCodexErrorCode,
 } from "./parse.js";
 import { pathExists, prepareManagedCodexHome, resolveManagedCodexHomeDir, resolveSharedCodexHomeDir } from "./codex-home.js";
-import { resolveCodexDesiredSkillNames } from "./skills.js";
+import { normalizeCodexAgentRole, resolveCodexDesiredSkillNames } from "./skills.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_ROLLOUT_NOISE_RE =
@@ -385,11 +385,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     typeof envConfig.CODEX_HOME === "string" && envConfig.CODEX_HOME.trim().length > 0
       ? path.resolve(envConfig.CODEX_HOME.trim())
       : null;
-  const codexSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
-  const desiredSkillNames = resolveCodexDesiredSkillNames(config, codexSkillEntries);
+  const agentRole = normalizeCodexAgentRole(
+    agent.role ?? context.paperclipAgentRole ?? config.paperclipAgentRole,
+  );
+  const runtimeSkillConfig = agentRole ? { ...config, paperclipAgentRole: agentRole } : config;
+  const codexSkillEntries = await readPaperclipRuntimeSkillEntries(runtimeSkillConfig, __moduleDir);
+  const desiredSkillNames = resolveCodexDesiredSkillNames(runtimeSkillConfig, codexSkillEntries, {
+    agentRole,
+  });
   await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
   const preparedManagedCodexHome =
-    configuredCodexHome ? null : await prepareManagedCodexHome(process.env, onLog, agent.companyId);
+    configuredCodexHome
+      ? null
+      : await prepareManagedCodexHome(process.env, onLog, agent.companyId, agentRole);
   const defaultCodexHome = resolveManagedCodexHomeDir(process.env, agent.companyId);
   const effectiveCodexHome = configuredCodexHome ?? preparedManagedCodexHome ?? defaultCodexHome;
   await fs.mkdir(effectiveCodexHome, { recursive: true });
@@ -409,6 +417,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
   env.CODEX_HOME = effectiveCodexHome;
   env.PAPERCLIP_RUN_ID = runId;
+  if (agentRole) {
+    env.PAPERCLIP_AGENT_ROLE = agentRole;
+  }
   const wakeTaskId =
     (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
     (typeof context.issueId === "string" && context.issueId.trim().length > 0 && context.issueId.trim()) ||

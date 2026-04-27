@@ -104,6 +104,19 @@ describe("agentmail helpers", () => {
         subject: "Realtime message",
         text: "Plain text body",
         html: "<p>Plain text body</p>",
+        attachments: [
+          {
+            file_name: "requirements.pdf",
+            content_type: "application/pdf",
+            size: "1200",
+            url: "https://files.example/requirements.pdf",
+          },
+          {
+            name: "notes.txt",
+            mime_type: "text/plain",
+            text: "Attachment notes",
+          },
+        ],
         size: 42,
         updatedAt: "2026-04-14T09:00:00.000Z",
         createdAt: "2026-04-14T09:00:00.000Z",
@@ -120,6 +133,19 @@ describe("agentmail helpers", () => {
         email: "sender@example.com",
         name: "Sender Name",
       },
+      attachments: [
+        expect.objectContaining({
+          filename: "requirements.pdf",
+          mimeType: "application/pdf",
+          byteSize: 1200,
+          downloadUrl: "https://files.example/requirements.pdf",
+        }),
+        expect.objectContaining({
+          filename: "notes.txt",
+          mimeType: "text/plain",
+          textContent: "Attachment notes",
+        }),
+      ],
     }));
   });
 

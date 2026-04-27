@@ -1,4 +1,10 @@
-import type { AgentAdapterType, CompanyMembership, CompanyMembershipRole, JoinRequest } from "@paperclipai/shared";
+import type {
+  AgentAdapterType,
+  CompanyApprovalRole,
+  CompanyMembership,
+  CompanyMembershipRole,
+  JoinRequest,
+} from "@paperclipai/shared";
 import { api } from "./client";
 
 type InviteSummary = {
@@ -134,6 +140,9 @@ export const accessApi = {
 
   updateMemberRole: (companyId: string, memberId: string, membershipRole: CompanyMembershipRole) =>
     api.patch<CompanyMembership>(`/companies/${companyId}/members/${memberId}/role`, { membershipRole }),
+
+  updateMemberApprovalRole: (companyId: string, memberId: string, approvalRole: CompanyApprovalRole | null) =>
+    api.patch<CompanyMembership>(`/companies/${companyId}/members/${memberId}/approval-role`, { approvalRole }),
 
   approveJoinRequest: (companyId: string, requestId: string) =>
     api.post<JoinRequest>(`/companies/${companyId}/join-requests/${requestId}/approve`, {}),

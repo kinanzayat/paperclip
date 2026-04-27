@@ -383,10 +383,8 @@ describe("codex execute", () => {
         commentIds: ["comment-1", "comment-2"],
       });
       expect(capture.prompt).toContain("## Paperclip Wake Payload");
-      expect(capture.prompt).toContain("Treat this wake payload as the highest-priority change for the current heartbeat.");
-      expect(capture.prompt).toContain("Do not switch to another issue until you have handled this wake.");
       expect(capture.prompt).toContain(
-        "acknowledge the latest comment and explain how it changes your next action.",
+        "Treat this wake payload as the top priority for this heartbeat and acknowledge the latest comment first.",
       );
       expect(capture.prompt).toContain("First comment");
       expect(capture.prompt).toContain("Second comment");
@@ -560,7 +558,7 @@ describe("codex execute", () => {
       const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
       expect(capture.argv).toEqual(expect.arrayContaining(["resume", "codex-session-1", "-"]));
       expect(capture.prompt).toContain("## Paperclip Resume Delta");
-      expect(capture.prompt).toContain("Do not switch to another issue until you have handled this wake.");
+      expect(capture.prompt).toContain("Resume the current issue session and handle only the wake delta below.");
       expect(capture.prompt).toContain("Second comment");
       expect(capture.prompt).not.toContain("Follow the paperclip heartbeat.");
       expect(capture.prompt).not.toContain("You are managed instructions.");
@@ -593,6 +591,9 @@ describe("codex execute", () => {
       "codex-home",
     );
     const homeSkill = path.join(isolatedCodexHome, "skills", "paperclip");
+    const paraMemorySkill = path.join(isolatedCodexHome, "skills", "para-memory-files");
+    const createAgentSkill = path.join(isolatedCodexHome, "skills", "paperclip-create-agent");
+    const createPluginSkill = path.join(isolatedCodexHome, "skills", "paperclip-create-plugin");
     await fs.mkdir(workspace, { recursive: true });
     await fs.mkdir(sharedCodexHome, { recursive: true });
     await fs.writeFile(path.join(sharedCodexHome, "auth.json"), '{"token":"shared"}\n', "utf8");
@@ -618,6 +619,7 @@ describe("codex execute", () => {
           id: "agent-1",
           companyId: "company-1",
           name: "Codex Coder",
+          role: "engineer",
           adapterType: "codex_local",
           adapterConfig: {},
         },
@@ -673,6 +675,9 @@ describe("codex execute", () => {
       expect((await fs.lstat(isolatedConfig)).isFile()).toBe(true);
       expect(await fs.readFile(isolatedConfig, "utf8")).toBe('model = "codex-mini-latest"\n');
       expect((await fs.lstat(homeSkill)).isSymbolicLink()).toBe(true);
+      await expect(fs.lstat(paraMemorySkill)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.lstat(createAgentSkill)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.lstat(createPluginSkill)).rejects.toMatchObject({ code: "ENOENT" });
       expect(logs).toContainEqual(
         expect.objectContaining({
           stream: "stdout",

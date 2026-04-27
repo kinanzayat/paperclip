@@ -3,6 +3,7 @@ import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Link } from "@/lib/router";
 import type { Issue } from "@paperclipai/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
 import { authApi } from "../api/auth";
 import { issuesApi } from "../api/issues";
@@ -12,7 +13,7 @@ import { useCompanyStatuses } from "../hooks/useCompanyStatuses";
 import { queryKeys } from "../lib/queryKeys";
 import { useProjectOrder } from "../hooks/useProjectOrder";
 import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "../lib/recent-assignees";
-import { formatAssigneeUserLabel } from "../lib/assignees";
+import { formatAssigneeUserLabel, memberAssigneeOptions } from "../lib/assignees";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon } from "./PriorityIcon";
 import { Identity } from "./Identity";
@@ -144,6 +145,12 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
     enabled: !!companyId,
   });
 
+  const { data: members } = useQuery({
+    queryKey: queryKeys.access.members(companyId!),
+    queryFn: () => accessApi.listMembers(companyId!),
+    enabled: !!companyId,
+  });
+
   const { data: projects } = useQuery({
     queryKey: queryKeys.projects.list(companyId!),
     queryFn: () => projectsApi.list(companyId!),
@@ -216,6 +223,36 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
     () => sortAgentsByRecency((agents ?? []).filter((a) => a.status !== "terminated"), recentAssigneeIds),
     [agents, recentAssigneeIds],
   );
+  const memberOptions = useMemo(
+    () => memberAssigneeOptions(members, currentUserId ?? null),
+    [members, currentUserId],
+  );
+  const quickUserOptionIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (currentUserId) ids.add(`user:${currentUserId}`);
+    if (issue.createdByUserId) ids.add(`user:${issue.createdByUserId}`);
+    return ids;
+  }, [currentUserId, issue.createdByUserId]);
+  const filteredMemberOptions = useMemo(() => {
+    const query = assigneeSearch.trim().toLowerCase();
+    return memberOptions
+      .filter((option) => !quickUserOptionIds.has(option.id))
+      .filter((option) => {
+        if (!query) return true;
+        return (
+          option.label.toLowerCase().includes(query)
+          || option.searchText?.toLowerCase().includes(query)
+          || false
+        );
+      });
+  }, [memberOptions, quickUserOptionIds, assigneeSearch]);
+  const filteredAgents = useMemo(() => {
+    const query = assigneeSearch.trim().toLowerCase();
+    return sortedAgents.filter((agent) => {
+      if (!query) return true;
+      return agent.name.toLowerCase().includes(query);
+    });
+  }, [sortedAgents, assigneeSearch]);
 
   const assignee = issue.assigneeAgentId
     ? agents?.find((a) => a.id === issue.assigneeAgentId)
@@ -386,13 +423,23 @@ export function IssueProperties({ issue, onUpdate, inline }: IssuePropertiesProp
             {creatorUserLabel ? `Assign to ${creatorUserLabel}` : "Assign to requester"}
           </button>
         )}
-        {sortedAgents
-          .filter((a) => {
-            if (!assigneeSearch.trim()) return true;
-            const q = assigneeSearch.toLowerCase();
-            return a.name.toLowerCase().includes(q);
-          })
-          .map((a) => (
+        {filteredMemberOptions.map((option) => (
+          <button
+            key={option.id}
+            className={cn(
+              "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
+              option.id === `user:${issue.assigneeUserId ?? ""}` && "bg-accent",
+            )}
+            onClick={() => {
+              onUpdate({ assigneeAgentId: null, assigneeUserId: option.id.slice("user:".length) });
+              setAssigneeOpen(false);
+            }}
+          >
+            <User className="h-3 w-3 shrink-0 text-muted-foreground" />
+            {option.label}
+          </button>
+        ))}
+        {filteredAgents.map((a) => (
           <button
             key={a.id}
             className={cn(

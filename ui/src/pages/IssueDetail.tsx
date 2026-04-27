@@ -14,7 +14,14 @@ import { useCompany } from "../context/CompanyContext";
 import { usePanel } from "../context/PanelContext";
 import { useToast } from "../context/ToastContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
-import { assigneeValueFromSelection, suggestedCommentAssigneeValue } from "../lib/assignees";
+import {
+  activeUserMembers,
+  assigneeValueFromSelection,
+  memberAssigneeOptions,
+  memberAssigneeSearchText,
+  memberDisplayName,
+  suggestedCommentAssigneeValue,
+} from "../lib/assignees";
 import { extractIssueTimelineEvents } from "../lib/issue-timeline-events";
 import { queryKeys } from "../lib/queryKeys";
 import {
@@ -79,7 +86,6 @@ import {
   isClosedIsolatedExecutionWorkspace,
   type ActivityEvent,
   type Agent,
-  type CompanyMembership,
   type FeedbackVote,
   type Issue,
   type IssueAttachment,
@@ -313,31 +319,6 @@ function ActorIdentity({ evt, agentMap }: { evt: ActivityEvent; agentMap: Map<st
   return <Identity name={id || "Unknown"} size="sm" />;
 }
 
-function activeUserMembers(members: CompanyMembership[] | undefined) {
-  return (members ?? []).filter(
-    (member) => member.status === "active" && member.principalType === "user",
-  );
-}
-
-function memberDisplayName(member: CompanyMembership, currentUserId: string | null) {
-  return member.user?.name?.trim()
-    || member.user?.email?.trim()
-    || (member.principalId === "local-board" ? "Board" : null)
-    || (currentUserId && member.principalId === currentUserId ? "You" : null)
-    || member.principalId.slice(0, 8);
-}
-
-function memberMentionSearchText(member: CompanyMembership, currentUserId: string | null) {
-  return [
-    memberDisplayName(member, currentUserId),
-    member.user?.email ?? "",
-    member.principalId,
-    currentUserId && member.principalId === currentUserId ? "me you self" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
 export function IssueDetail() {
   const { issueId } = useParams<{ issueId: string }>();
   const { selectedCompanyId, selectedCompany } = useCompany();
@@ -541,7 +522,7 @@ export function IssueDetail() {
         kind: "user",
         userId: member.principalId,
         userImage: member.user?.image ?? null,
-        searchText: memberMentionSearchText(member, currentUserId),
+        searchText: memberAssigneeSearchText(member, currentUserId),
       });
     }
     for (const project of orderedProjects) {
@@ -571,15 +552,7 @@ export function IssueDetail() {
     for (const agent of activeAgents) {
       options.push({ id: `agent:${agent.id}`, label: agent.name });
     }
-    for (const member of activeUserMembers(members)) {
-      options.push({
-        id: `user:${member.principalId}`,
-        label: currentUserId && member.principalId === currentUserId
-          ? "Me"
-          : memberDisplayName(member, currentUserId),
-        searchText: memberMentionSearchText(member, currentUserId),
-      });
-    }
+    options.push(...memberAssigneeOptions(members, currentUserId));
     return options;
   }, [agents, members, currentUserId]);
 

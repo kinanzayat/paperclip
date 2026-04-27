@@ -420,8 +420,11 @@ export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
 export const MEMBERSHIP_STATUSES = ["pending", "active", "suspended"] as const;
 export type MembershipStatus = (typeof MEMBERSHIP_STATUSES)[number];
 
-export const COMPANY_MEMBERSHIP_ROLES = ["admin", "member", "product_owner_head", "tech_team"] as const;
+export const COMPANY_MEMBERSHIP_ROLES = ["admin", "member"] as const;
 export type CompanyMembershipRole = (typeof COMPANY_MEMBERSHIP_ROLES)[number];
+
+export const COMPANY_APPROVAL_ROLES = ["product_owner_head", "tech_team"] as const;
+export type CompanyApprovalRole = (typeof COMPANY_APPROVAL_ROLES)[number];
 
 export const INSTANCE_USER_ROLES = ["instance_admin"] as const;
 export type InstanceUserRole = (typeof INSTANCE_USER_ROLES)[number];

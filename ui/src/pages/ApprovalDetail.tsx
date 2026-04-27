@@ -185,12 +185,20 @@ export function ApprovalDetail() {
   const isActionable = approval.status === "pending" || approval.status === "revision_requested";
   const requiredRoles = normalizeRequiredRoles(approval.requiredRoles);
   const currentUserId = session?.user?.id ?? session?.session?.userId ?? null;
-  const currentMembershipRole = (members ?? [])
-    .find((member) => member.principalType === "user" && member.principalId === currentUserId && member.status === "active")
-    ?.membershipRole ?? null;
+  const currentApprovalRole = (() => {
+    const membership = (members ?? [])
+      .find((member) => member.principalType === "user" && member.principalId === currentUserId && member.status === "active");
+    if (!membership) return null;
+    const legacyRole = (membership as { membershipRole?: string | null }).membershipRole;
+    return membership.approvalRole ?? (
+      legacyRole === "product_owner_head" || legacyRole === "tech_team"
+        ? legacyRole
+        : null
+    );
+  })();
   const roleMatched = requiredRoles.length === 0
     || session?.user?.isInstanceAdmin === true
-    || (currentMembershipRole ? requiredRoles.includes(currentMembershipRole) : false);
+    || (currentApprovalRole ? requiredRoles.includes(currentApprovalRole) : false);
   const canResolveAction = isActionable && roleMatched;
   const isBudgetApproval = approval.type === "budget_override_required";
   const TypeIcon = typeIcon[approval.type] ?? defaultTypeIcon;

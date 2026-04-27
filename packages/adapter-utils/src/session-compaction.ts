@@ -41,8 +41,8 @@ const ADAPTER_MANAGED_SESSION_POLICY: SessionCompactionPolicy = {
 // and runaway prompt growth.
 const LEAN_CODEX_LOCAL_SESSION_POLICY: SessionCompactionPolicy = {
   enabled: true,
-  maxSessionRuns: 12,
-  maxRawInputTokens: 250_000,
+  maxSessionRuns: 8,
+  maxRawInputTokens: 150_000,
   maxSessionAgeHours: 24,
 };
 
